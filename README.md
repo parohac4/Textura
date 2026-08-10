@@ -62,13 +62,33 @@ naposledy použitá:
 cargo run -p textura-app ~/Poznamky
 ```
 
-## Balíčky
+## Vydání nové verze
+
+```sh
+./release.sh 0.2.0 --dry-run    # ukáže, co se stane
+./release.sh 0.2.0
+```
+
+Skript zvýší verzi, pustí testy, postaví balíčky, commitne, otaguje, pushne
+a založí GitHub release. Před pushem se zeptá.
+
+Verze se zadává jen na jednom místě — `[workspace.package] version`
+v [Cargo.toml](Cargo.toml). `tauri.conf.json` ji záměrně neuvádí, Tauri si ji
+z `Cargo.toml` vezme samo.
+
+## Balíčky ručně
 
 ```sh
 cd crates/textura-app && cargo tauri build
 ```
 
 Vyrobí `.deb`, `.rpm` a AppImage v `target/release/bundle/`.
+
+Aktualizace nainstalované aplikace:
+
+```sh
+sudo apt install ./target/release/bundle/deb/Textura_0.1.0_amd64.deb
+```
 
 Pozor na cesty v `tauri.conf.json`: `frontendDist` je relativní k samotnému
 konfiguračnímu souboru, ale `beforeDevCommand` a `beforeBuildCommand` se
