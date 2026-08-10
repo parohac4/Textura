@@ -21,6 +21,7 @@ pub mod tags;
 pub mod tasks;
 pub mod text;
 pub mod urls;
+pub mod workspace;
 
 pub use comments::Comment;
 pub use links::{Anchor, LinkKind, WikiLink};
@@ -30,6 +31,7 @@ pub use tags::Tag;
 pub use tasks::{Task, TaskAttribute, TaskState};
 pub use text::{LineEnding, Span};
 pub use urls::Url;
+pub use workspace::{Backlink, IndexedNote, Resolution, SearchHit, Workspace};
 
 /// Rozparsovaná poznámka. Všechny spany jsou byte offsety do původního vstupu
 /// včetně případného BOM.

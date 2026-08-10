@@ -1,3 +1,9 @@
 /target
 **/*.rs.bk
-Cargo.lock
+
+# Frontend
+node_modules/
+ui/dist/
+
+# Tauri generuje při buildu
+crates/textura-app/gen/

@@ -1,0 +1,28 @@
+[package]
+name = "textura-app"
+description = "Desktopová aplikace Textura"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "textura_app_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+textura-core = { path = "../textura-core" }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Kontrola překlepů se zapíná na WebKitGTK kontextu, ke kterému se dostaneme
+# jen přes tenhle crate. Musí mít stejnou verzi, jakou používá Tauri/wry.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "=2.0.2"

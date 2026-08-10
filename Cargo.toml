@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/textura-core"]
+members = ["crates/textura-core", "crates/textura-app"]
+# Jádro se musí dát testovat i tam, kde nejsou systémové knihovny pro Tauri
+# (GTK/WebKit). `cargo test` proto staví jen textura-core; aplikace se staví
+# explicitně přes `cargo tauri dev` / `-p textura-app`.
+default-members = ["crates/textura-core"]
 
 [workspace.package]
 version = "0.1.0"
