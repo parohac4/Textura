@@ -74,7 +74,16 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
 [ -z "$(git status --porcelain)" ] || die "pracovní strom není čistý — commitni nebo zahoď změny"
 
-git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "tag $TAG už existuje"
+if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+    # Tag jen lokálně znamená přerušený běh — poraď, jak ho dokončit,
+    # ať uživatel nemusí hádat.
+    if [ -z "$(git ls-remote --tags origin "refs/tags/$TAG" 2>/dev/null)" ]; then
+        printf '\033[33mtag %s existuje lokálně, ale ne na originu — vypadá to na přerušené vydání.\033[0m\n' "$TAG" >&2
+        echo "  dokončit:  git push origin main && git push origin $TAG" >&2
+        echo "  zahodit:   git tag -d $TAG && git reset --hard HEAD^" >&2
+    fi
+    die "tag $TAG už existuje"
+fi
 
 gh auth status >/dev/null 2>&1 || die "gh není přihlášené (spusť: gh auth login)"
 
@@ -181,8 +190,14 @@ if [ "$ASSUME_YES" != 1 ]; then
     case "$answer" in
         a | A | y | Y) ;;
         *)
-            echo "Zastaveno. Commit i tag zůstávají lokálně;"
-            echo "zrušíš je: git tag -d $TAG && git reset --hard HEAD^"
+            # Rozdělaný stav je horší než žádný: commit a tag by zůstaly
+            # lokálně, nebylo by je vidět a příští běh by se o existující tag
+            # zastavil. Vracíme proto všechno do stavu před spuštěním.
+            step "Zastaveno — vracím commit i tag"
+            git tag -d "$TAG" >/dev/null
+            git reset --hard HEAD^ >/dev/null
+            echo "  Verze zpátky na $CURRENT, pracovní strom čistý."
+            echo "  Balíčky $VERSION zůstávají v target/release/bundle/."
             exit 0
             ;;
     esac
