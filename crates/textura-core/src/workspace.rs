@@ -10,6 +10,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use crate::links::{LinkKind, WikiLink};
+use crate::search::{fold, fold_with_offsets, Query};
 use crate::text::Span;
 use crate::{parse, Note};
 
@@ -105,15 +106,34 @@ pub enum Resolution {
     Unresolved { suggested_path: String },
 }
 
+/// Kde se nález potkal s dotazem. Určuje i pořadí výsledků — poznámka, která
+/// se jmenuje jako dotaz, je skoro vždycky ta hledaná.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HitKind {
+    /// Název poznámky (`@title`, jinak název souboru).
+    Title,
+    /// Jeden z `@aliases`.
+    Alias,
+    /// Tělo poznámky.
+    Body,
+}
+
 /// Nález fulltextu.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchHit {
     pub path: String,
+    pub kind: HitKind,
+    /// Řádek nálezu (1-based). U nálezu v názvu nebo aliasu je to řádek
+    /// příslušné property, a pokud poznámka název nese jen jménem souboru, `1`.
     pub line: usize,
-    /// Řádek s nálezem, ořezaný o okolní whitespace.
+    /// Text k zobrazení: řádek s nálezem ořezaný o okolní whitespace,
+    /// u názvu a aliasu jejich vlastní text.
     pub snippet: String,
-    /// Rozsah nálezu v obsahu poznámky.
+    /// Rozsah nálezu v obsahu poznámky. Prázdný, pokud nález v obsahu není —
+    /// například název odvozený od jména souboru.
     pub span: Span,
+    /// Rozsah nálezu uvnitř `snippet`, pro zvýraznění v seznamu výsledků.
+    pub snippet_span: Span,
 }
 
 /// Zpětný odkaz na poznámku.
@@ -142,29 +162,6 @@ pub struct Workspace {
 
 fn lower(s: &str) -> String {
     s.to_lowercase()
-}
-
-/// Převede text na malá písmena a k tomu vrátí mapu offsetů zpátky do
-/// originálu.
-///
-/// `to_lowercase` může změnit délku i počet znaků — turecké `İ` se rozpadne na
-/// `i` a kombinující tečku. Přepočet přes počty znaků by proto rozsah nálezu
-/// posunul; mapa drží pro každý byte výsledku offset znaku, ze kterého vznikl.
-/// Mapa má o jeden prvek navíc jako zarážku, aby šel adresovat i konec.
-fn lower_with_offsets(s: &str) -> (String, Vec<usize>) {
-    let mut lowered = String::with_capacity(s.len());
-    let mut map: Vec<usize> = Vec::with_capacity(s.len() + 1);
-
-    for (byte, ch) in s.char_indices() {
-        let before = lowered.len();
-        for lc in ch.to_lowercase() {
-            lowered.push(lc);
-        }
-        map.resize(map.len() + (lowered.len() - before), byte);
-    }
-    map.push(s.len());
-
-    (lowered, map)
 }
 
 /// Odmítne cesty, které by vedly mimo workspace (`..`, absolutní cesty).
@@ -447,43 +444,128 @@ impl Workspace {
         out
     }
 
-    /// Fulltext přes obsah poznámek, case-insensitive.
+    /// Fulltext přes názvy, aliasy a obsah poznámek.
+    ///
+    /// Porovnává se bez ohledu na velikost písmen a na diakritiku (`zluty`
+    /// najde `Žluťoučký`) a výrazy oddělené mezerami platí jako AND — poznámka
+    /// musí obsahovat všechny, ale je jedno kde a v jakém pořadí. Vypíšou se
+    /// pak ty řádky, na kterých je aspoň jeden z výrazů, takže je vidět
+    /// kontext obou stran dotazu.
+    ///
+    /// Nálezy v názvu a v aliasu jdou první — kdo hledá `docker`, chce nejspíš
+    /// poznámku *Docker*, ne dvacet zmínek o ní.
     ///
     /// `limit` omezuje počet nálezů, aby UI nedostalo desetitisíce řádků.
     pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
-        let needle = lower(query.trim());
-        if needle.is_empty() {
+        let query = Query::parse(query);
+        if query.is_empty() || limit == 0 {
             return Vec::new();
         }
 
-        let mut out = Vec::new();
-        'notes: for note in &self.notes {
-            let haystack = lower(&note.content);
-            // `to_lowercase` může změnit délku, takže offsety hledáme znovu
-            // nad původním textem po řádcích — tím zůstanou spany platné.
-            if !haystack.contains(&needle) {
+        let mut named: Vec<SearchHit> = Vec::new();
+        let mut body: Vec<SearchHit> = Vec::new();
+
+        for note in &self.notes {
+            // Název a aliasy jsou samostatný nález — poznámka *Docker* se má
+            // najít i tehdy, když se v jejím těle slovo „docker“ neobjeví.
+            let hit = if query.matches(&note.title) {
+                Some(self.named_hit(note, &query, HitKind::Title, &note.title))
+            } else {
+                note.aliases
+                    .iter()
+                    .find(|a| query.matches(a))
+                    .map(|alias| self.named_hit(note, &query, HitKind::Alias, alias))
+            };
+
+            // Řádek property, ze které nález v názvu pochází, se v těle
+            // přeskočí — jinak by se `@title: Docker` vypsal dvakrát. Když se
+            // property nenašla (název je jen jméno souboru), přeskakovat není
+            // co a řádek zůstává normálním kandidátem.
+            let skip_line = hit
+                .as_ref()
+                .filter(|h| !h.span.is_empty())
+                .map(|h| h.line);
+            named.extend(hit);
+
+            if body.len() >= limit || !query.matches_folded(&fold(&note.content)) {
                 continue;
             }
+
             let mut offset = 0usize;
             for (n, line) in note.content.split_inclusive('\n').enumerate() {
-                let (line_lower, map) = lower_with_offsets(line);
-                if let Some(rel) = line_lower.find(&needle) {
-                    let start = map[rel];
-                    let end = map[rel + needle.len()];
-                    out.push(SearchHit {
+                if Some(n + 1) == skip_line {
+                    offset += line.len();
+                    continue;
+                }
+                // Skládání mění délku, takže offsety nálezu hledáme přes mapu
+                // zpátky do původního řádku — tím zůstanou spany platné.
+                let (folded, map) = fold_with_offsets(line);
+                if let Some((rel_start, rel_end)) = query.first_hit_folded(&folded) {
+                    let start = map[rel_start];
+                    let end = map[rel_end];
+                    let trimmed = line.trim();
+                    let lead = line.len() - line.trim_start().len();
+                    body.push(SearchHit {
                         path: note.path.clone(),
+                        kind: HitKind::Body,
                         line: n + 1,
-                        snippet: line.trim().to_string(),
+                        snippet: trimmed.to_string(),
                         span: Span::new(offset + start, offset + end),
+                        snippet_span: Span::new(
+                            start.saturating_sub(lead),
+                            end.saturating_sub(lead),
+                        ),
                     });
-                    if out.len() >= limit {
-                        break 'notes;
+                    if body.len() >= limit {
+                        break;
                     }
                 }
                 offset += line.len();
             }
         }
-        out
+
+        named.extend(body);
+        named.truncate(limit);
+        named
+    }
+
+    /// Nález v názvu nebo aliasu poznámky.
+    ///
+    /// Řádek a rozsah v obsahu se dohledají v property, ze které text pochází.
+    /// Když poznámka název nese jen jménem souboru, v obsahu žádný nález není
+    /// a zbyde prázdný rozsah na prvním řádku.
+    fn named_hit(&self, note: &IndexedNote, query: &Query, kind: HitKind, text: &str) -> SearchHit {
+        let (folded, map) = fold_with_offsets(text);
+        // Nález tu být musí — text prošel `matches` —, ale spadnout kvůli
+        // zvýraznění by bylo hloupé, takže se v krajním případě označí celý.
+        let (rel_start, rel_end) = query.first_hit_folded(&folded).unwrap_or((0, folded.len()));
+        let snippet_span = Span::new(map[rel_start], map[rel_end]);
+
+        let key = match kind {
+            HitKind::Title => "title",
+            HitKind::Alias => "aliases",
+            HitKind::Body => "",
+        };
+        let (line, span) = parse(&note.content)
+            .property(key)
+            .and_then(|p| {
+                let value = p.value_span.slice(&note.content);
+                let at = p.value_span.start + value.find(text)?;
+                Some((
+                    p.line,
+                    Span::new(at + snippet_span.start, at + snippet_span.end),
+                ))
+            })
+            .unwrap_or((1, Span::new(0, 0)));
+
+        SearchHit {
+            path: note.path.clone(),
+            kind,
+            line,
+            snippet: text.to_string(),
+            span,
+            snippet_span,
+        }
     }
 
     /// Poznámky s daným tagem, včetně hierarchických potomků

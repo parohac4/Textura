@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use textura_core::workspace::{Resolution, Workspace};
+use textura_core::workspace::{HitKind, Resolution, Workspace};
 
 /// Dočasný workspace, který se po testu sám uklidí.
 struct TempWorkspace {
@@ -937,10 +937,133 @@ fn fulltext_je_case_insensitive() {
     );
     let ws = tmp.load();
     let hits = ws.search("DOCKER", 50);
+
+    // Nález v názvu (odvozeném od jména souboru) a k němu nález v těle.
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].kind, HitKind::Title);
+    assert_eq!(hits[0].snippet, "Docker");
+    assert_eq!(hits[1].kind, HitKind::Body);
+    assert_eq!(hits[1].path, "Docker.txt");
+    assert_eq!(hits[1].line, 1);
+    assert_eq!(hits[1].snippet, "Docker používám pro provoz služeb.");
+}
+
+#[test]
+fn fulltext_hleda_bez_ohledu_na_diakritiku() {
+    let tmp = TempWorkspace::new(
+        "search-fold",
+        &[("A.txt", "Příliš žluťoučký kůň úpěl ďábelské ódy.\n")],
+    );
+    let ws = tmp.load();
+
+    let hits = ws.search("zlutoucky", 50);
     assert_eq!(hits.len(), 1);
+
+    // Zvýraznit se má původní zápis včetně diakritiky.
+    let content = &ws.note(ws.index_of_path("A.txt").unwrap()).unwrap().content;
+    assert_eq!(hits[0].span.slice(content), "žluťoučký");
+
+    // A obráceně: dotaz s diakritikou najde text bez ní.
+    let tmp = TempWorkspace::new("search-fold-back", &[("B.txt", "zlutoucky kun\n")]);
+    let ws = tmp.load();
+    assert_eq!(ws.search("žluťoučký", 50).len(), 1);
+}
+
+#[test]
+fn fulltext_bere_vic_vyrazu_jako_and() {
+    let tmp = TempWorkspace::new(
+        "search-and",
+        &[
+            ("A.txt", "Docker běží na serveru.\nMariaDB je vedle.\n"),
+            ("B.txt", "Jen docker a nic víc.\n"),
+        ],
+    );
+    let ws = tmp.load();
+
+    // Oba výrazy jsou v A, i když každý na jiném řádku; B vypadne.
+    let hits = ws.search("docker mariadb", 50);
+    assert!(hits.iter().all(|h| h.path == "A.txt"));
+
+    // Vypíšou se řádky s kterýmkoli z výrazů, ať je pořadí v dotazu jakékoli.
+    let lines: Vec<usize> = hits.iter().map(|h| h.line).collect();
+    assert_eq!(lines, vec![1, 2]);
+    assert_eq!(ws.search("mariadb docker", 50).len(), hits.len());
+}
+
+#[test]
+fn fulltext_radi_nazev_a_alias_pred_telo() {
+    let tmp = TempWorkspace::new(
+        "search-order",
+        &[
+            ("Zminky.txt", "docker\ndocker\n"),
+            ("Docker.txt", "@title: Docker\n\nkontejnery\n"),
+            ("Podman.txt", "@aliases: Docker náhrada\n\nkontejnery\n"),
+        ],
+    );
+    let ws = tmp.load();
+    let hits = ws.search("docker", 50);
+
+    assert_eq!(hits[0].kind, HitKind::Title);
     assert_eq!(hits[0].path, "Docker.txt");
-    assert_eq!(hits[0].line, 1);
-    assert_eq!(hits[0].snippet, "Docker používám pro provoz služeb.");
+    assert_eq!(hits[0].line, 1); // řádek property @title
+    assert_eq!(hits[1].kind, HitKind::Alias);
+    assert_eq!(hits[1].path, "Podman.txt");
+    assert!(hits[2..].iter().all(|h| h.kind == HitKind::Body));
+}
+
+#[test]
+fn nalez_v_nazvu_ukazuje_na_property_v_obsahu() {
+    let tmp = TempWorkspace::new(
+        "search-title-span",
+        &[("A.txt", "@aliases: Kůň, Docker\n\ntělo\n")],
+    );
+    let ws = tmp.load();
+    let hits = ws.search("docker", 50);
+
+    assert_eq!(hits[0].kind, HitKind::Alias);
+    let content = &ws.note(ws.index_of_path("A.txt").unwrap()).unwrap().content;
+    assert_eq!(hits[0].span.slice(content), "Docker");
+}
+
+#[test]
+fn nalez_v_nazvu_nezdvoji_radek_property() {
+    let tmp = TempWorkspace::new(
+        "search-no-dup",
+        &[("A.txt", "@title: Docker\n\nzmínka o dockeru\n")],
+    );
+    let ws = tmp.load();
+    let hits = ws.search("docker", 50);
+
+    // Nález v názvu a jedna zmínka v těle — řádek `@title:` se nevypisuje
+    // podruhé.
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].kind, HitKind::Title);
+    assert_eq!(hits[1].line, 3);
+}
+
+#[test]
+fn nazev_z_jmena_souboru_nezakryje_nalez_na_prvnim_radku() {
+    // Název odvozený od jména souboru v obsahu nikde není, takže se první
+    // řádek přeskakovat nesmí.
+    let tmp = TempWorkspace::new("search-name-line", &[("Kůň.txt", "kůň běží\n")]);
+    let ws = tmp.load();
+    let hits = ws.search("kun", 50);
+
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].kind, HitKind::Title);
+    assert_eq!(hits[1].kind, HitKind::Body);
+    assert_eq!(hits[1].line, 1);
+}
+
+#[test]
+fn nalez_ma_rozsah_i_uvnitr_snippetu() {
+    let tmp = TempWorkspace::new("search-snippet", &[("A.txt", "    a potom docker konec\n")]);
+    let ws = tmp.load();
+    let hits = ws.search("docker", 50);
+
+    // Snippet je řádek bez odsazení, takže rozsah musí být přepočítaný.
+    let hit = &hits[0];
+    assert_eq!(hit.snippet_span.slice(&hit.snippet), "docker");
 }
 
 #[test]

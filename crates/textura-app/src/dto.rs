@@ -5,7 +5,7 @@
 
 use serde::Serialize;
 use textura_core::links::Anchor;
-use textura_core::workspace::{IndexedNote, Resolution, Workspace};
+use textura_core::workspace::{HitKind, IndexedNote, Resolution, Workspace};
 use textura_core::{LinkKind, Note, TaskState};
 
 use crate::offsets::Utf16Map;
@@ -303,6 +303,46 @@ pub struct SearchResult {
     pub title: String,
     pub line: usize,
     pub snippet: String,
+    /// Kde se nález potkal s dotazem: `title`, `alias` nebo `body`.
+    pub kind: &'static str,
+    /// UTF-16 rozsah nálezu uvnitř `snippet` — zvýraznění v seznamu výsledků.
+    pub snippet_from: u32,
+    pub snippet_to: u32,
+    /// UTF-16 rozsah nálezu v obsahu poznámky, aby ho editor po otevření mohl
+    /// označit. `null`, pokud nález v obsahu není (název z jména souboru).
+    pub match_from: Option<u32>,
+    pub match_to: Option<u32>,
+}
+
+impl SearchResult {
+    /// `content_map` je mapa obsahu poznámky, ve které nález leží.
+    pub fn from(hit: textura_core::SearchHit, title: String, content_map: &Utf16Map) -> Self {
+        let snippet_map = Utf16Map::new(&hit.snippet);
+        let (match_from, match_to) = if hit.span.is_empty() {
+            (None, None)
+        } else {
+            (
+                Some(content_map.at(hit.span.start)),
+                Some(content_map.at(hit.span.end)),
+            )
+        };
+
+        Self {
+            path: hit.path,
+            title,
+            line: hit.line,
+            kind: match hit.kind {
+                HitKind::Title => "title",
+                HitKind::Alias => "alias",
+                HitKind::Body => "body",
+            },
+            snippet_from: snippet_map.at(hit.snippet_span.start),
+            snippet_to: snippet_map.at(hit.snippet_span.end),
+            snippet: hit.snippet,
+            match_from,
+            match_to,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -332,5 +372,57 @@ impl MoveOutcome {
             updated_notes: report.updated_notes,
             bare_links: report.bare_links,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SearchResult;
+    use crate::offsets::Utf16Map;
+    use textura_core::workspace::HitKind;
+    use textura_core::{SearchHit, Span};
+
+    #[test]
+    fn nalez_prevede_byty_na_utf16() {
+        let content = "Kůň žluťoučký\n";
+        let start = content.find("žluťoučký").unwrap();
+        let hit = SearchHit {
+            path: "A.txt".into(),
+            kind: HitKind::Body,
+            line: 1,
+            snippet: "Kůň žluťoučký".into(),
+            span: Span::new(start, start + "žluťoučký".len()),
+            snippet_span: Span::new(start, start + "žluťoučký".len()),
+        };
+
+        let result = SearchResult::from(hit, "A".into(), &Utf16Map::new(content));
+
+        // Bytů je před nálezem 6 (ů a ň jsou dvoubytové), UTF-16 jednotek 4.
+        assert_eq!(start, 6);
+        assert_eq!(result.match_from, Some(4));
+        assert_eq!(result.match_to, Some(13));
+        assert_eq!(result.snippet_from, 4);
+        assert_eq!(result.snippet_to, 13);
+        assert_eq!(result.kind, "body");
+    }
+
+    #[test]
+    fn nalez_bez_rozsahu_v_obsahu_nema_match() {
+        // Název odvozený od jména souboru v obsahu poznámky není.
+        let hit = SearchHit {
+            path: "Docker.txt".into(),
+            kind: HitKind::Title,
+            line: 1,
+            snippet: "Docker".into(),
+            span: Span::new(0, 0),
+            snippet_span: Span::new(0, 6),
+        };
+
+        let result = SearchResult::from(hit, "Docker".into(), &Utf16Map::new("obsah\n"));
+
+        assert_eq!(result.match_from, None);
+        assert_eq!(result.match_to, None);
+        assert_eq!(result.kind, "title");
+        assert_eq!((result.snippet_from, result.snippet_to), (0, 6));
     }
 }

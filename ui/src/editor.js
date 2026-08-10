@@ -242,13 +242,24 @@ export function setContent(view, content) {
   });
 }
 
-/** Skok na řádek (1-based). */
-export function goToLine(view, line) {
+/**
+ * Skok na řádek (1-based). `match` je nepovinný UTF-16 rozsah `{ from, to }`,
+ * který se označí — po kliknutí do výsledků hledání je pak nález vidět rovnou
+ * pod kurzorem.
+ */
+export function goToLine(view, line, match = null) {
   const target = Math.max(1, Math.min(line, view.state.doc.lines));
   const pos = view.state.doc.line(target).from;
+
+  // Poznámka mohla mezitím na disku vyrůst nebo se zkrátit, takže se rozsah
+  // vždycky ořezává na skutečnou délku dokumentu.
+  const len = view.state.doc.length;
+  const from = match ? Math.max(0, Math.min(match.from, len)) : pos;
+  const to = match ? Math.max(from, Math.min(match.to, len)) : pos;
+
   view.dispatch({
-    selection: { anchor: pos },
-    effects: EditorView.scrollIntoView(pos, { y: "center" }),
+    selection: { anchor: from, head: to },
+    effects: EditorView.scrollIntoView(from, { y: "center" }),
   });
   view.focus();
 }

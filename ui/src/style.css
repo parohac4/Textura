@@ -14,6 +14,8 @@
   --tag: #3d7a2a;
   --section: #c2405a;
   --done: #9aa1ae;
+  --hit-bg: #ffe08a;
+  --hit-text: #1f2430;
   --mono: ui-monospace, "JetBrains Mono", "Fira Code", "DejaVu Sans Mono", monospace;
   --sans: system-ui, "Segoe UI", sans-serif;
 
@@ -44,6 +46,8 @@
     --tag: #9ece6a;
     --section: #f7768e;
     --done: #5c6370;
+    --hit-bg: #6b5410;
+    --hit-text: #f6ecd2;
     --c-red: #f7768e;
     --c-orange: #ff9e64;
     --c-yellow: #e0af68;
@@ -69,6 +73,8 @@
   --tag: #9ece6a;
   --section: #f7768e;
   --done: #5c6370;
+  --hit-bg: #6b5410;
+  --hit-text: #f6ecd2;
   --c-red: #f7768e;
   --c-orange: #ff9e64;
   --c-yellow: #e0af68;
@@ -235,6 +241,25 @@ button.primary {
 
 .mono {
   font-family: var(--mono);
+}
+
+/* Zvýrazněný nález ve výsledcích hledání. */
+.row-sub mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--hit-bg);
+  color: var(--hit-text);
+}
+
+/* Nález v názvu nebo aliasu — odznak vedle názvu poznámky. */
+.hit-kind {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--muted);
+  vertical-align: 1px;
 }
 
 /* --- barvy poznámek a složek --------------------------------------------- */

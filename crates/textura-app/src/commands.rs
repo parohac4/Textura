@@ -1,5 +1,6 @@
 //! Tauri commandy — jediné rozhraní mezi UI a jádrem.
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use tauri::State;
@@ -7,6 +8,7 @@ use textura_core::workspace::{Resolution, Workspace};
 use textura_core::{parse, LineEnding};
 
 use crate::dto::*;
+use crate::offsets::Utf16Map;
 
 #[derive(Default)]
 pub struct AppState {
@@ -376,18 +378,22 @@ pub fn backlinks(path: String, state: State<AppState>) -> Res<Vec<BacklinkEntry>
 #[tauri::command]
 pub fn search(query: String, state: State<AppState>) -> Res<Vec<SearchResult>> {
     with_ws(&state, |ws| {
+        // Nálezů z jedné poznámky bývá víc, takže se mapa offsetů jejího obsahu
+        // staví jen jednou — jinak by se dlouhá poznámka přemapovala 200×.
+        let mut maps: HashMap<String, Utf16Map> = HashMap::new();
+
         Ok(ws
             .search(&query, 200)
             .into_iter()
-            .map(|hit| SearchResult {
-                title: ws
-                    .index_of_path(&hit.path)
-                    .and_then(|i| ws.note(i))
+            .map(|hit| {
+                let note = ws.index_of_path(&hit.path).and_then(|i| ws.note(i));
+                let title = note
                     .map(|n| n.title.clone())
-                    .unwrap_or_else(|| hit.path.clone()),
-                path: hit.path,
-                line: hit.line,
-                snippet: hit.snippet,
+                    .unwrap_or_else(|| hit.path.clone());
+                let map = maps
+                    .entry(hit.path.clone())
+                    .or_insert_with(|| Utf16Map::new(note.map_or("", |n| n.content.as_str())));
+                SearchResult::from(hit, title, map)
             })
             .collect())
     })

@@ -169,6 +169,8 @@ i tam, kde nejsou GTK/WebKit knihovny.
 * přejmenovat a přesouvat poznámky i složky, vnořovat složky do sebe
 * obarvit poznámky i složky osmi barvami
 * filtrovat podle tagu a fulltextem, s lištou pro zrušení filtru
+* <kbd>Ctrl</kbd>+<kbd>F</kbd> skočí do hledání, <kbd>Esc</kbd> ho zruší
+  a vrátí kurzor do poznámky
 * nastavení: motiv (podle systému / světlý / tmavý) a kontrola překlepů
   nad systémovými slovníky
 * editor se zvýrazněním `[[odkazů]]`, `#tagů`, `== sekcí ==`, úkolů, URL
@@ -179,7 +181,8 @@ i tam, kde nejsou GTK/WebKit knihovny.
 * klik na `[ ]` překlikne úkol
 * automatické pokračování seznamů a úkolů na Enter
 * panel zpětných odkazů
-* fulltext přes celý workspace
+* fulltext přes celý workspace — bez ohledu na diakritiku, víc slov jako AND,
+  se zvýrazněným nálezem
 * autosave se zachováním původních konců řádků a BOM
 
 ### Přesun a mazání
@@ -233,6 +236,28 @@ Mazání není nevratné: poznámka nebo složka se přesune do
 neindexuje. Neprázdnou složku smaže jen po výslovném potvrzení, které říká,
 kolika poznámek se to týká.
 
+### Hledání
+
+<kbd>Ctrl</kbd>+<kbd>F</kbd> skočí do hledacího pole, <kbd>Esc</kbd> hledání
+zruší a vrátí kurzor do rozepsané poznámky.
+
+Porovnává se **bez ohledu na velikost písmen a na diakritiku**, takže `zluty`
+najde *Žluťoučký* a `manana` najde *mañana* — kdo píše česky, nemusí kvůli
+hledání přepínat klávesnici. Zvýrazní se přitom původní zápis, diakritika
+i velká písmena.
+
+Výrazy oddělené mezerou platí jako **AND**: `docker mariadb` najde poznámky,
+ve kterých je obojí, ať je pořadí jakékoli a ať jsou na stejném řádku nebo ne.
+Vypíšou se pak řádky s kterýmkoli z výrazů, aby byl vidět kontext obou stran
+dotazu.
+
+Hledá se i v **názvech** (`@title`, jinak jméno souboru) a v **aliasech**;
+takové nálezy jdou první a nesou odznak *název* / *alias*. Kdo hledá `docker`,
+chce nejspíš poznámku *Docker*, ne dvacet zmínek o ní.
+
+Nález je zvýrazněný ve výpisu výsledků a po kliknutí i označený v editoru, takže
+je hned vidět, na co se kliklo.
+
 ## Co parser umí
 
 * properties `@title:`, `@aliases:`, libovolné uživatelské klíče
@@ -260,8 +285,9 @@ assert_eq!(note.tags[0].name, "docker");
 | Část | Stav |
 | --- | --- |
 | parser formátu | hotovo, 59 testů |
-| index, resolver, složky, backlinky, fulltext | hotovo, 38 testů |
-| Tauri backend | hotovo, 12 testů |
+| index, resolver, složky, backlinky, fulltext | hotovo, 73 testů |
+| skládání textu pro hledání (diakritika, dotaz) | hotovo, 8 testů |
+| Tauri backend | hotovo, 14 testů |
 | UI | hotové pro MVP, testované ručně |
 | přejmenování a přesouvání poznámek s aktualizací odkazů | plánováno |
 | sledování změn na disku (watch) | plánováno |

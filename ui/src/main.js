@@ -316,7 +316,8 @@ function renderTreeNode(parent, node, depth) {
 
 // --- poznámka --------------------------------------------------------------
 
-async function openNote(path, line = null) {
+/** `match` je UTF-16 rozsah nálezu, který se má v editoru označit. */
+async function openNote(path, line = null, match = null) {
   await flushPending();
   try {
     const note = await api.readNote(path);
@@ -330,7 +331,7 @@ async function openNote(path, line = null) {
 
     setContent(view, note.content);
     view.dispatch({ effects: setAnalysis.of(note.analysis) });
-    if (line) goToLine(view, line);
+    if (line) goToLine(view, line, match);
     else view.focus();
 
     renderView();
@@ -402,6 +403,13 @@ $("search").addEventListener("input", (event) => {
   schedule("searchTimer", 200, () => runSearch(query));
 });
 
+/** Ctrl+F — kurzor do hledání, s předvybraným dotazem k přepsání. */
+function focusSearch() {
+  const input = $("search");
+  input.focus();
+  input.select();
+}
+
 async function runSearch(query) {
   if (!state.workspace) return;
   if (!query.trim()) {
@@ -418,6 +426,9 @@ async function runSearch(query) {
   }
 }
 
+/** Popisek druhu nálezu; nález v těle se pozná už podle čísla řádku. */
+const HIT_KINDS = { title: "název", alias: "alias" };
+
 function renderSearchHits(list, hits) {
   if (!hits.length) {
     list.append(empty("Nic nenalezeno."));
@@ -427,11 +438,43 @@ function renderSearchHits(list, hits) {
     const row = document.createElement("button");
     row.className = "row";
     row.innerHTML = `<span class="row-title"></span><span class="row-sub mono"></span>`;
-    row.querySelector(".row-title").textContent = `${hit.title}:${hit.line}`;
-    row.querySelector(".row-sub").textContent = hit.snippet;
-    row.onclick = () => openNote(hit.path, hit.line);
+
+    const title = row.querySelector(".row-title");
+    title.textContent = hit.kind === "body" ? `${hit.title}:${hit.line}` : hit.title;
+    if (HIT_KINDS[hit.kind]) {
+      const badge = document.createElement("span");
+      badge.className = "hit-kind";
+      badge.textContent = HIT_KINDS[hit.kind];
+      title.append(badge);
+    }
+
+    row.querySelector(".row-sub").append(highlighted(hit.snippet, hit.snippetFrom, hit.snippetTo));
+    const match =
+      hit.matchFrom === null ? null : { from: hit.matchFrom, to: hit.matchTo };
+    row.onclick = () => openNote(hit.path, hit.line, match);
     list.append(row);
   }
+}
+
+/**
+ * Text se zvýrazněným úsekem `from`–`to` (UTF-16 offsety ze backendu).
+ *
+ * Skládá se z textových uzlů, ne z HTML — obsah poznámky se do stránky nikdy
+ * nevkládá jako značky.
+ */
+function highlighted(text, from, to) {
+  const out = document.createDocumentFragment();
+  const start = Math.max(0, Math.min(from ?? 0, text.length));
+  const end = Math.max(start, Math.min(to ?? 0, text.length));
+  if (end === start) {
+    out.append(text);
+    return out;
+  }
+
+  const mark = document.createElement("mark");
+  mark.textContent = text.slice(start, end);
+  out.append(text.slice(0, start), mark, text.slice(end));
+  return out;
 }
 
 // --- tagy ------------------------------------------------------------------
@@ -1371,13 +1414,23 @@ document.addEventListener("contextmenu", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     // Escape zavírá postupně: menu, dialog, filtr v seznamu.
+    const inSearch = document.activeElement === $("search");
     if (!$("context-menu").hidden) closeContextMenu();
     else if (!$("modal").hidden) closeModal();
-    else if (state.view.mode !== "tree") clearFilter();
+    else if (state.view.mode !== "tree" || inSearch) {
+      clearFilter();
+      // Z hledání se Escapem vrací kurzor do rozepsané poznámky.
+      if (inSearch && state.current) view.focus();
+    }
   }
   if ((event.ctrlKey || event.metaKey) && event.key === "n") {
     event.preventDefault();
     showNewNote();
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key === "f") {
+    // Bez preventDefault by webview otevřel vlastní hledání v stránce.
+    event.preventDefault();
+    focusSearch();
   }
 });
 window.addEventListener("beforeunload", () => {
