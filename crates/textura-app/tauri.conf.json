@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../../ui/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "npm --prefix ../../ui run dev",
-    "beforeBuildCommand": "npm --prefix ../../ui run build"
+    "beforeDevCommand": "npm --prefix ../ui run dev",
+    "beforeBuildCommand": "npm --prefix ../ui run build"
   },
   "app": {
     "windows": [
@@ -29,7 +29,11 @@
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
+      "icons/128x128@2x.png",
       "icons/icon.png"
-    ]
+    ],
+    "category": "Utility",
+    "shortDescription": "Poznámky v obyčejných .txt souborech",
+    "longDescription": "Textura je poznámkovač nad obyčejnými UTF-8 .txt soubory. Poznámka zůstává čitelná jako prostý text i bez aplikace — bez Markdownu, bez povinného markupu a bez skrytého stavu v databázi."
   }
 }

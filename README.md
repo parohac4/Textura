@@ -62,15 +62,21 @@ naposledy použitá:
 cargo run -p textura-app ~/Poznamky
 ```
 
-Produkční build:
+## Balíčky
 
 ```sh
-npm --prefix ui run build
-cargo tauri build
+cd crates/textura-app && cargo tauri build
 ```
 
-Bez tauri-cli je potřeba zapnout feature `custom-protocol` ručně — bez ní by
-i release build hledal frontend na vývojovém serveru:
+Vyrobí `.deb`, `.rpm` a AppImage v `target/release/bundle/`.
+
+Pozor na cesty v `tauri.conf.json`: `frontendDist` je relativní k samotnému
+konfiguračnímu souboru, ale `beforeDevCommand` a `beforeBuildCommand` se
+spouštějí z **nadřazené** složky (Tauri počítá s rozvržením `projekt/src-tauri/`).
+Proto `../../ui/dist`, ale `--prefix ../ui`.
+
+Ruční produkční build bez tauri-cli potřebuje feature `custom-protocol` —
+bez ní by i release build hledal frontend na vývojovém serveru:
 
 ```sh
 npm --prefix ui run build
