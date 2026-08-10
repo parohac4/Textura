@@ -95,6 +95,29 @@ fn lower(s: &str) -> String {
     s.to_lowercase()
 }
 
+/// Převede text na malá písmena a k tomu vrátí mapu offsetů zpátky do
+/// originálu.
+///
+/// `to_lowercase` může změnit délku i počet znaků — turecké `İ` se rozpadne na
+/// `i` a kombinující tečku. Přepočet přes počty znaků by proto rozsah nálezu
+/// posunul; mapa drží pro každý byte výsledku offset znaku, ze kterého vznikl.
+/// Mapa má o jeden prvek navíc jako zarážku, aby šel adresovat i konec.
+fn lower_with_offsets(s: &str) -> (String, Vec<usize>) {
+    let mut lowered = String::with_capacity(s.len());
+    let mut map: Vec<usize> = Vec::with_capacity(s.len() + 1);
+
+    for (byte, ch) in s.char_indices() {
+        let before = lowered.len();
+        for lc in ch.to_lowercase() {
+            lowered.push(lc);
+        }
+        map.resize(map.len() + (lowered.len() - before), byte);
+    }
+    map.push(s.len());
+
+    (lowered, map)
+}
+
 /// Odmítne cesty, které by vedly mimo workspace (`..`, absolutní cesty).
 fn is_safe_relative(path: &str) -> bool {
     if path.is_empty() {
@@ -220,8 +243,29 @@ impl Workspace {
     }
 
     /// Absolutní cesta k souboru ve workspace. `None`, pokud by cesta vedla ven.
+    ///
+    /// Textová kontrola (`..`, absolutní cesty) nestačí — symlink umístěný
+    /// uvnitř workspace by jinak dovolil číst i přepisovat soubory kdekoli
+    /// jinde. Cesta se proto ještě rozbalí a ověří proti skutečnému kořeni.
     pub fn absolute(&self, rel_path: &str) -> Option<PathBuf> {
-        is_safe_relative(rel_path).then(|| self.root.join(rel_path))
+        if !is_safe_relative(rel_path) {
+            return None;
+        }
+        let joined = self.root.join(rel_path);
+        let root = self.root.canonicalize().ok()?;
+
+        // U dosud neexistujícího souboru ověřujeme nejbližšího existujícího
+        // předka — ten už symlinkem být může.
+        let mut probe = joined.clone();
+        let real = loop {
+            match probe.canonicalize() {
+                Ok(resolved) => break resolved,
+                Err(_) if probe.pop() => continue,
+                Err(_) => return None,
+            }
+        };
+
+        real.starts_with(&root).then_some(joined)
     }
 
     /// Přeloží wiki odkaz podle pravidel ze specifikace:
@@ -372,20 +416,10 @@ impl Workspace {
             }
             let mut offset = 0usize;
             for (n, line) in note.content.split_inclusive('\n').enumerate() {
-                let line_lower = lower(line);
+                let (line_lower, map) = lower_with_offsets(line);
                 if let Some(rel) = line_lower.find(&needle) {
-                    // Pozici přepočítáme přes počet znaků, ne bytů.
-                    let chars_before = line_lower[..rel].chars().count();
-                    let start = line
-                        .char_indices()
-                        .nth(chars_before)
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                    let end = line
-                        .char_indices()
-                        .nth(chars_before + query.trim().chars().count())
-                        .map(|(i, _)| i)
-                        .unwrap_or(line.len());
+                    let start = map[rel];
+                    let end = map[rel + needle.len()];
                     out.push(SearchHit {
                         path: note.path.clone(),
                         line: n + 1,
@@ -484,7 +518,25 @@ impl Workspace {
     }
 
     /// Vytvoří novou poznámku. Selže, pokud soubor už existuje.
+    ///
+    /// Poznámka musí končit na `.txt`. Bez toho by kliknutí na odkaz
+    /// v cizí poznámce mohlo uživatele navést k založení jakéhokoli souboru
+    /// ve workspace — třeba skriptu nebo konfigurace.
     pub fn create(&mut self, rel_path: &str, content: &str) -> io::Result<usize> {
+        if !rel_path
+            .rsplit('/')
+            .next()
+            .map(|name| {
+                let lower = name.to_lowercase();
+                lower.len() > NOTE_EXT.len() + 1 && lower.ends_with(&format!(".{NOTE_EXT}"))
+            })
+            .unwrap_or(false)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "poznámka musí mít příponu .txt",
+            ));
+        }
         let abs = self
             .absolute(rel_path)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cesta mimo workspace"))?;
@@ -545,7 +597,12 @@ fn collect_notes(
             continue;
         }
 
+        // Symlinky se do indexu neberou vůbec — jinak by stačilo do workspace
+        // podstrčit odkaz a aplikace by přes něj sahala ven.
         let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
         if file_type.is_dir() {
             if let Ok(rel) = path.strip_prefix(root) {
                 folders.insert(rel.to_string_lossy().replace('\\', "/"));

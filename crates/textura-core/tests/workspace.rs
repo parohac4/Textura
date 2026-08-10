@@ -186,6 +186,92 @@ fn prazdna_slozka_prezije_znovunacteni() {
     assert_eq!(reloaded.folders(), vec!["Prazdna"]);
 }
 
+// --- bezpečnost cest -------------------------------------------------------
+
+/// Vytvoří vedle workspace složku „mimo“ se souborem, který nikdo nemá číst
+/// ani přepsat, a uvnitř workspace symlink, který na ni míří.
+fn workspace_se_symlinkem(name: &str) -> (TempWorkspace, PathBuf) {
+    use std::os::unix::fs::symlink;
+
+    let tmp = TempWorkspace::new(name, &[("A.txt", "a\n")]);
+    let outside = tmp.root.parent().unwrap().join(format!("{name}-mimo"));
+    let _ = fs::remove_dir_all(&outside);
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("tajne.txt"), "TAJEMSTVÍ\n").unwrap();
+    symlink(&outside, tmp.root.join("unik")).unwrap();
+    (tmp, outside)
+}
+
+#[test]
+fn symlink_ven_z_workspace_neprojde_pri_zapisu() {
+    let (tmp, outside) = workspace_se_symlinkem("symlink-write");
+    let mut ws = tmp.load();
+
+    assert!(
+        ws.write("unik/tajne.txt", "PŘEPSÁNO\n").is_err(),
+        "zápis skrz symlink musí selhat"
+    );
+    assert_eq!(
+        fs::read_to_string(outside.join("tajne.txt")).unwrap(),
+        "TAJEMSTVÍ\n",
+        "soubor mimo workspace zůstal nedotčený"
+    );
+
+    let _ = fs::remove_dir_all(&outside);
+}
+
+#[test]
+fn symlink_ven_z_workspace_neprojde_pri_cteni() {
+    let (tmp, outside) = workspace_se_symlinkem("symlink-read");
+    let ws = tmp.load();
+
+    assert!(ws.read("unik/tajne.txt").is_err(), "čtení skrz symlink musí selhat");
+    assert!(ws.absolute("unik/tajne.txt").is_none());
+
+    let _ = fs::remove_dir_all(&outside);
+}
+
+#[test]
+fn symlink_ven_z_workspace_neprojde_ani_pri_vytvoreni() {
+    // Kliknutí na [[unik/nova]] v cizí poznámce nesmí založit soubor venku.
+    let (tmp, outside) = workspace_se_symlinkem("symlink-create");
+    let mut ws = tmp.load();
+
+    assert!(ws.create("unik/nova.txt", "obsah\n").is_err());
+    assert!(!outside.join("nova.txt").exists());
+
+    let _ = fs::remove_dir_all(&outside);
+}
+
+#[test]
+fn symlinky_se_neindexuji() {
+    let (tmp, outside) = workspace_se_symlinkem("symlink-scan");
+    fs::write(outside.join("cizi.txt"), "cizí poznámka\n").unwrap();
+    // Symlink přímo na soubor, ne jen na složku.
+    std::os::unix::fs::symlink(outside.join("cizi.txt"), tmp.root.join("Podvrh.txt")).unwrap();
+
+    let ws = tmp.load();
+    let paths: Vec<_> = ws.notes().iter().map(|n| n.path.as_str()).collect();
+    assert_eq!(paths, vec!["A.txt"], "symlinky nepatří do indexu");
+    assert!(ws.folders().is_empty(), "symlinkovaná složka nepatří do stromu");
+
+    let _ = fs::remove_dir_all(&outside);
+}
+
+#[test]
+fn poznamka_musi_mit_priponu_txt() {
+    // Odkaz [[skript.sh]] by jinak uživatele navedl k založení skriptu.
+    let tmp = TempWorkspace::new("create-ext", &[("A.txt", "a\n")]);
+    let mut ws = tmp.load();
+
+    assert!(ws.create("skript.sh", "#!/bin/sh\nrm -rf /\n").is_err());
+    assert!(ws.create(".bashrc", "evil\n").is_err());
+    assert!(ws.create(".txt", "prazdny nazev\n").is_err());
+    assert!(!tmp.root.join("skript.sh").exists());
+
+    assert!(ws.create("Poznámka.TXT", "velká přípona projde\n").is_ok());
+}
+
 // --- resolver --------------------------------------------------------------
 
 #[test]
@@ -467,6 +553,19 @@ fn fulltext_vraci_platny_span_i_s_diakritikou() {
     assert_eq!(hits.len(), 1);
     let content = &ws.note(ws.index_of_path("A.txt").unwrap()).unwrap().content;
     assert_eq!(hits[0].span.slice(content), "žluťoučký");
+}
+
+#[test]
+fn fulltext_drzi_span_i_kdyz_lowercase_meni_pocet_znaku() {
+    // Turecké İ se v lowercase rozpadne na dva znaky (i + kombinující tečka).
+    // Přepočet přes počty znaků by rozsah nálezu posunul.
+    let tmp = TempWorkspace::new("search-lowercase", &[("A.txt", "İstanbul a potom docker\n")]);
+    let ws = tmp.load();
+
+    let hits = ws.search("docker", 10);
+    assert_eq!(hits.len(), 1);
+    let content = &ws.note(ws.index_of_path("A.txt").unwrap()).unwrap().content;
+    assert_eq!(hits[0].span.slice(content), "docker");
 }
 
 #[test]

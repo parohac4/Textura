@@ -593,7 +593,11 @@ function showNewNote(preselect = "") {
     const root = new Option("(kořen workspace)", "");
     folder.append(root);
     for (const f of existingFolders()) folder.append(new Option(f, f));
-    folder.append(new Option("Nová složka…", " new"));
+    // Sentinel se porovnává přes referenci na prvek, ne přes hodnotu —
+    // řetězcová hodnota by mohla kolidovat s názvem skutečné složky.
+    const newFolderOption = new Option("Nová složka…", "");
+    folder.append(newFolderOption);
+    const creatingNewFolder = () => folder.selectedOptions[0] === newFolderOption;
     folder.value = preselect;
     folderLabel.append(folder);
 
@@ -606,7 +610,7 @@ function showNewNote(preselect = "") {
     newFolderLabel.append(newFolder);
 
     folder.onchange = () => {
-      newFolderLabel.hidden = folder.value !== " new";
+      newFolderLabel.hidden = !creatingNewFolder();
       if (!newFolderLabel.hidden) newFolder.focus();
       updatePreview();
     };
@@ -615,7 +619,7 @@ function showNewNote(preselect = "") {
     preview.className = "block";
 
     const targetFolder = () =>
-      folder.value === " new" ? newFolder.value.trim().replace(/^\/+|\/+$/g, "") : folder.value;
+      creatingNewFolder() ? newFolder.value.trim().replace(/^\/+|\/+$/g, "") : folder.value;
 
     const targetPath = () => {
       // Název bez .txt; lomítko v názvu funguje jako podsložka.
