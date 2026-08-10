@@ -45,10 +45,16 @@ npm --prefix ui install
 ## Spuštění
 
 ```sh
-cargo tauri dev            # potřebuje `cargo install tauri-cli --version '^2'`
+cd crates/textura-app && cargo tauri dev
 ```
 
-nebo bez tauri-cli:
+Potřebuje `cargo install tauri-cli --version '^2' --locked`. Spouští se
+z adresáře s `tauri.conf.json`, stejně jako build.
+
+Na vývoj tohle stačí — balíček stavět nemusíš. Frontend se při změně překreslí
+sám.
+
+Nebo bez tauri-cli:
 
 ```sh
 npm --prefix ui run dev &                 # frontend na :5173
@@ -64,17 +70,55 @@ cargo run -p textura-app ~/Poznamky
 
 ## Vydání nové verze
 
+Běžná práce se commituje a pushuje jako obvykle. Push sám o sobě **nijak
+neaktualizuje nainstalovanou aplikaci** — `.deb` je zmrazený snímek binárky.
+Novou verzi vydáš takhle:
+
 ```sh
-./release.sh 0.2.0 --dry-run    # ukáže, co se stane
-./release.sh 0.2.0
+git push                                                        # běžné commity
+./release.sh 0.2.0                                              # vydání
+sudo apt install ./target/release/bundle/deb/Textura_0.2.0_amd64.deb
 ```
 
-Skript zvýší verzi, pustí testy, postaví balíčky, commitne, otaguje, pushne
-a založí GitHub release. Před pushem se zeptá.
+[release.sh](release.sh) projde celý postup: kontroly → zvýšení verze → testy →
+balíčky → commit → tag → push → GitHub release. Popis tagu poskládá z commitů
+od minulého tagu. Před pushem se zeptá.
 
-Verze se zadává jen na jednom místě — `[workspace.package] version`
-v [Cargo.toml](Cargo.toml). `tauri.conf.json` ji záměrně neuvádí, Tauri si ji
-z `Cargo.toml` vezme samo.
+```sh
+./release.sh 0.2.0 --dry-run    # jen vypíše plán, nic nezmění
+./release.sh 0.2.0 --yes        # nezeptá se před pushem
+```
+
+Skript odmítne pokračovat, pokud nejsi na `main`, pracovní strom není čistý,
+tag už existuje, `gh` není přihlášené nebo je `origin/main` napřed. Když
+selžou testy nebo build, vrátí změnu verze zpátky.
+
+Poslední krok — instalaci — skript nedělá schválně, protože vyžaduje `sudo`.
+Vypíše ti ho na konci k zkopírování.
+
+Co skript nehlídá: jestli číslo verze odpovídá povaze změn. Volba mezi
+patch, minor a major zůstává na tobě.
+
+### Kde se verze bere
+
+Jen na jednom místě — `[workspace.package] version` v [Cargo.toml](Cargo.toml).
+`tauri.conf.json` ji záměrně neuvádí a Tauri si ji z `Cargo.toml` vezme samo.
+Dřív byla na dvou místech a nic nehlídalo, že se shodují, takže zvýšení jen
+jednoho z nich tiše vyrobilo balíček s jinou verzí než crate.
+
+### Zjištění verze a odinstalace
+
+Ověřit, co je nainstalované:
+
+```sh
+dpkg -s textura | grep Version
+```
+
+Odinstalovat:
+
+```sh
+sudo apt remove textura
+```
 
 ## Balíčky ručně
 
