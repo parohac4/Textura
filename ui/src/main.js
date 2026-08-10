@@ -199,6 +199,11 @@ function noteRow(note) {
   row.innerHTML = `<span class="row-title"></span><span class="row-sub"></span>`;
   row.querySelector(".row-title").textContent = note.title;
   row.onclick = () => openNote(note.path);
+  row.oncontextmenu = (event) =>
+    showContextMenu(event, note.title, [
+      ["Přesunout…", () => showMoveNote(note)],
+      ["Smazat…", () => showDeleteNote(note)],
+    ]);
   return row;
 }
 
@@ -279,6 +284,14 @@ function renderTreeNode(parent, node, depth) {
       event.stopPropagation();
       showNewNote(child.path);
     };
+
+    row.oncontextmenu = (event) =>
+      showContextMenu(event, child.path, [
+        ["Nová poznámka…", () => showNewNote(child.path)],
+        ["Nová podsložka…", () => showNewFolder(child.path)],
+        ["Přesunout…", () => showMoveFolder(child.path)],
+        ["Smazat…", () => showDeleteFolder(child.path)],
+      ]);
 
     row.append(toggle, add);
     parent.append(row);
@@ -489,6 +502,306 @@ function showPicker(candidates) {
       body.append(row);
     }
   });
+}
+
+// --- kontextové menu -------------------------------------------------------
+
+/** Menu na pravý klik. `items` je pole dvojic [popisek, akce]. */
+function showContextMenu(event, heading, items) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const menu = $("context-menu");
+  menu.replaceChildren();
+
+  const title = document.createElement("li");
+  title.className = "menu-heading";
+  title.textContent = heading;
+  menu.append(title);
+
+  for (const [label, action] of items) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.textContent = label;
+    button.onclick = () => {
+      closeContextMenu();
+      action();
+    };
+    item.append(button);
+    menu.append(item);
+  }
+
+  // Nejdřív zobrazit, ať se dá změřit, pak teprve umístit do okna.
+  menu.hidden = false;
+  const { offsetWidth: w, offsetHeight: h } = menu;
+  menu.style.left = `${Math.min(event.clientX, window.innerWidth - w - 8)}px`;
+  menu.style.top = `${Math.min(event.clientY, window.innerHeight - h - 8)}px`;
+}
+
+function closeContextMenu() {
+  $("context-menu").hidden = true;
+}
+
+// --- přesun a mazání -------------------------------------------------------
+
+/** Nabídka cílových složek pro `<select>`. */
+function folderOptions(select, { exclude = [] } = {}) {
+  select.append(new Option("(kořen workspace)", ""));
+  for (const folder of existingFolders()) {
+    if (exclude.some((e) => folder === e || folder.startsWith(`${e}/`))) continue;
+    select.append(new Option(folder, folder));
+  }
+}
+
+function showMoveNote(note) {
+  showModal(`Přesunout poznámku`, (body) => {
+    const info = document.createElement("p");
+    info.textContent = note.path;
+
+    const folderLabel = document.createElement("label");
+    folderLabel.textContent = "Cílová složka";
+    const folder = document.createElement("select");
+    folderOptions(folder);
+    folder.value = note.folder;
+    folderLabel.append(folder);
+
+    const nameLabel = document.createElement("label");
+    nameLabel.textContent = "Název";
+    const name = document.createElement("input");
+    name.type = "text";
+    name.value = note.name;
+    nameLabel.append(name);
+
+    const preview = document.createElement("code");
+    preview.className = "block";
+    const warning = document.createElement("p");
+    warning.className = "warn";
+
+    const confirm = document.createElement("button");
+    confirm.className = "primary";
+    confirm.textContent = "Přesunout";
+
+    const targetPath = () => {
+      const base = name.value.trim().replace(/\.txt$/i, "");
+      if (!base) return "";
+      return folder.value ? `${folder.value}/${base}.txt` : `${base}.txt`;
+    };
+
+    function update() {
+      const path = targetPath();
+      const same = path === note.path;
+      const taken =
+        path && !same && state.notes.some((n) => n.path.toLowerCase() === path.toLowerCase());
+
+      preview.textContent = taken ? `${path} — už existuje` : path || "…";
+      preview.className = taken ? "block conflict" : "block";
+      confirm.disabled = !path || same || taken;
+
+      // Odkazy [[Název]] bez cesty se při přejmenování rozbijí.
+      warning.textContent =
+        name.value.trim().replace(/\.txt$/i, "") !== note.name
+          ? "Změna názvu rozbije odkazy, které na poznámku míří jen názvem. Odkazy s celou cestou se opraví."
+          : "";
+    }
+
+    confirm.onclick = async () => {
+      const path = targetPath();
+      closeModal();
+      try {
+        const outcome = await api.moveNote(note.path, path);
+        if (state.current?.path === note.path) state.current.path = outcome.path;
+        await loadNotes();
+        await loadTags();
+        if (state.current?.path === outcome.path) await openNote(outcome.path);
+        reportMove(outcome);
+      } catch (err) {
+        showError(err);
+      }
+    };
+
+    name.oninput = update;
+    folder.onchange = update;
+    name.onkeydown = (event) => {
+      if (event.key === "Enter" && !confirm.disabled) confirm.click();
+    };
+
+    body.append(info, folderLabel, nameLabel, preview, warning, confirm);
+    update();
+    setTimeout(() => name.focus(), 0);
+  });
+}
+
+function showMoveFolder(path) {
+  const name = path.split("/").pop();
+
+  showModal("Přesunout složku", (body) => {
+    const info = document.createElement("p");
+    info.textContent = path;
+
+    const parentLabel = document.createElement("label");
+    parentLabel.textContent = "Nadřazená složka";
+    const parent = document.createElement("select");
+    // Sebe ani vlastní podsložky nabízet nesmíme — vznikl by cyklus.
+    folderOptions(parent, { exclude: [path] });
+    parentLabel.append(parent);
+
+    const preview = document.createElement("code");
+    preview.className = "block";
+
+    const confirm = document.createElement("button");
+    confirm.className = "primary";
+    confirm.textContent = "Přesunout";
+
+    const targetPath = () => (parent.value ? `${parent.value}/${name}` : name);
+
+    function update() {
+      const target = targetPath();
+      const same = target === path;
+      const taken = !same && (state.folders ?? []).includes(target);
+      preview.textContent = taken ? `${target} — už existuje` : target;
+      preview.className = taken ? "block conflict" : "block";
+      confirm.disabled = same || taken;
+    }
+
+    confirm.onclick = async () => {
+      const target = targetPath();
+      closeModal();
+      try {
+        const outcome = await api.moveFolder(path, target);
+        // Rozbalený stav se posune spolu se složkou.
+        for (const open of [...state.expanded]) {
+          if (open === path || open.startsWith(`${path}/`)) {
+            state.expanded.delete(open);
+            state.expanded.add(target + open.slice(path.length));
+          }
+        }
+        state.expanded.add(target);
+        localStorage.setItem("textura:expanded", JSON.stringify([...state.expanded]));
+
+        const current = state.current?.path;
+        if (current?.startsWith(`${path}/`)) {
+          state.current.path = target + current.slice(path.length);
+        }
+        await loadNotes();
+        await loadTags();
+        if (state.current) await openNote(state.current.path);
+        reportMove(outcome);
+      } catch (err) {
+        showError(err);
+      }
+    };
+
+    parent.onchange = update;
+    body.append(info, parentLabel, preview, confirm);
+    update();
+  });
+}
+
+function reportMove(outcome) {
+  const parts = [];
+  if (outcome.updatedLinks) {
+    parts.push(
+      `opraveno ${outcome.updatedLinks} odkazů v ${outcome.updatedNotes} poznámkách`,
+    );
+  }
+  if (outcome.bareLinks) {
+    parts.push(`${outcome.bareLinks} odkazů míří jen názvem — zkontroluj je`);
+  }
+  $("status").textContent = parts.length
+    ? `Přesunuto: ${parts.join("; ")}.`
+    : "Přesunuto.";
+  $("status").className = "";
+}
+
+function showDeleteNote(note) {
+  showModal("Smazat poznámku", (body) => {
+    const info = document.createElement("p");
+    info.textContent = "Přesune se do koše, odkud ji jde vrátit:";
+
+    const path = document.createElement("code");
+    path.className = "block";
+    path.textContent = note.path;
+
+    const note2 = document.createElement("p");
+    note2.textContent = "Koš je běžná složka .txtnote/trash/ ve workspace.";
+
+    const confirm = document.createElement("button");
+    confirm.className = "primary danger";
+    confirm.textContent = "Smazat";
+    confirm.onclick = async () => {
+      closeModal();
+      try {
+        const trashed = await api.deleteNote(note.path);
+        if (state.current?.path === note.path) closeNote();
+        await loadNotes();
+        await loadTags();
+        $("status").textContent = `Smazáno, leží v ${trashed}`;
+        $("status").className = "";
+      } catch (err) {
+        showError(err);
+      }
+    };
+
+    body.append(info, path, note2, confirm);
+  });
+}
+
+async function showDeleteFolder(path) {
+  let count = 0;
+  try {
+    count = await api.countNotesInFolder(path);
+  } catch (err) {
+    showError(err);
+    return;
+  }
+
+  showModal("Smazat složku", (body) => {
+    const info = document.createElement("p");
+    info.textContent = count
+      ? `Složka obsahuje ${count} poznámek. Smažou se všechny:`
+      : "Složka je prázdná:";
+
+    const target = document.createElement("code");
+    target.className = "block";
+    target.textContent = path;
+
+    const hint = document.createElement("p");
+    hint.textContent = "Vše se přesune do koše .txtnote/trash/ ve workspace.";
+
+    const confirm = document.createElement("button");
+    confirm.className = "primary danger";
+    confirm.textContent = count ? `Smazat i s ${count} poznámkami` : "Smazat";
+    confirm.onclick = async () => {
+      closeModal();
+      try {
+        const trashed = await api.deleteFolder(path, count > 0);
+        if (state.current?.path.startsWith(`${path}/`)) closeNote();
+        for (const open of [...state.expanded]) {
+          if (open === path || open.startsWith(`${path}/`)) state.expanded.delete(open);
+        }
+        await loadNotes();
+        await loadTags();
+        $("status").textContent = `Smazáno, leží v ${trashed}`;
+        $("status").className = "";
+      } catch (err) {
+        showError(err);
+      }
+    };
+
+    body.append(info, target, hint, confirm);
+  });
+}
+
+/** Zavře otevřenou poznámku (smazala se nebo zmizela pod rukama). */
+function closeNote() {
+  state.current = null;
+  state.dirty = false;
+  clearTimeout(state.saveTimer);
+  setContent(view, "");
+  $("note-title").textContent = "Textura";
+  $("note-path").textContent = "";
+  $("save-state").textContent = "";
+  $("backlinks").replaceChildren();
 }
 
 /** Složky, které ve workspace existují — včetně prázdných. */
@@ -829,10 +1142,20 @@ $("filter-clear").onclick = clearFilter;
 $("modal").onclick = (event) => {
   if (event.target.id === "modal") closeModal();
 };
+// Kontextové menu zmizí na kliknutí kamkoli jinam, na kolečko i na Escape.
+document.addEventListener("click", closeContextMenu);
+document.addEventListener("scroll", closeContextMenu, true);
+window.addEventListener("blur", closeContextMenu);
+document.addEventListener("contextmenu", (event) => {
+  // Pravý klik mimo řádky menu jen zavře; v editoru necháme systémové menu
+  // s návrhy oprav překlepů.
+  if (!event.target.closest(".row, .folder-row, #context-menu")) closeContextMenu();
+});
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    // Escape zavírá dialog; když žádný není, ruší filtr v seznamu.
-    if (!$("modal").hidden) closeModal();
+    // Escape zavírá postupně: menu, dialog, filtr v seznamu.
+    if (!$("context-menu").hidden) closeContextMenu();
+    else if (!$("modal").hidden) closeModal();
     else if (state.view.mode !== "tree") clearFilter();
   }
   if ((event.ctrlKey || event.metaKey) && event.key === "n") {

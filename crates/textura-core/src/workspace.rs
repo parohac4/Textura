@@ -17,6 +17,22 @@ use crate::{parse, Note};
 pub const NOTE_EXT: &str = "txt";
 /// Složka s technickými metadaty aplikace.
 pub const DATA_DIR: &str = ".txtnote";
+/// Koš uvnitř `.txtnote/`. Smazané poznámky se sem přesouvají, aby šlo
+/// překliknutí vzít zpět — soubory tam zůstávají čitelné jako obyčejný text.
+pub const TRASH_DIR: &str = "trash";
+
+/// Co se stalo s odkazy při přesunu.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MoveReport {
+    /// Kolik odkazů s explicitní cestou se přepsalo.
+    pub updated_links: usize,
+    /// V kolika poznámkách.
+    pub updated_notes: usize,
+    /// Odkazy holým názvem, které na přesouvanou poznámku mířily. Ty se
+    /// nepřepisují — pokud zůstal název stejný, dál fungují; při změně názvu
+    /// se z nich stanou nerozřešené odkazy.
+    pub bare_links: usize,
+}
 
 /// Jedna poznámka v indexu.
 #[derive(Debug, Clone)]
@@ -553,6 +569,310 @@ impl Workspace {
     pub fn parsed(&self, index: usize) -> Option<Note> {
         self.notes.get(index).map(|n| parse(&n.content))
     }
+
+    // --- mazání ------------------------------------------------------------
+
+    /// Poznámky ve složce a všech jejích podsložkách.
+    pub fn notes_in_folder(&self, folder: &str) -> Vec<usize> {
+        let prefix = format!("{}/", folder.trim_end_matches('/'));
+        self.notes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.path.starts_with(&prefix))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Cíl v koši pro danou cestu. Zajistí, že se nic nepřepíše.
+    fn trash_target(&self, rel_path: &str) -> io::Result<PathBuf> {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let base = self.root.join(DATA_DIR).join(TRASH_DIR);
+        let mut dest = base.join(format!("{stamp}")).join(rel_path);
+        let mut counter = 1;
+        while dest.exists() {
+            dest = base.join(format!("{stamp}-{counter}")).join(rel_path);
+            counter += 1;
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        Ok(dest)
+    }
+
+    /// Přesune poznámku do koše. Vrací cestu v koši relativně ke kořeni.
+    pub fn delete_note(&mut self, rel_path: &str) -> io::Result<String> {
+        let abs = self
+            .absolute(rel_path)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cesta mimo workspace"))?;
+        if !abs.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("poznámka {rel_path} neexistuje"),
+            ));
+        }
+
+        let dest = self.trash_target(rel_path)?;
+        fs::rename(&abs, &dest)?;
+
+        if let Some(i) = self.index_of_path(rel_path) {
+            self.notes.remove(i);
+            self.rebuild_lookups();
+        }
+
+        Ok(relative_to(&self.root, &dest))
+    }
+
+    /// Přesune složku i s obsahem do koše.
+    ///
+    /// Odmítne neprázdnou složku, pokud není `recursive` — smazání složky
+    /// s poznámkami má být vědomé rozhodnutí, ne vedlejší efekt překliku.
+    pub fn delete_folder(&mut self, rel_path: &str, recursive: bool) -> io::Result<String> {
+        let folder = rel_path.trim().trim_end_matches('/');
+        let abs = self
+            .absolute(folder)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cesta mimo workspace"))?;
+        if !abs.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("složka {folder} neexistuje"),
+            ));
+        }
+
+        if !recursive && fs::read_dir(&abs)?.next().is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::DirectoryNotEmpty,
+                "složka není prázdná",
+            ));
+        }
+
+        let dest = self.trash_target(folder)?;
+        fs::rename(&abs, &dest)?;
+
+        *self = Workspace::scan(&self.root)?;
+        Ok(relative_to(&self.root, &dest))
+    }
+
+    // --- přesun ------------------------------------------------------------
+
+    /// Přesune poznámku na jinou cestu (a tím ji případně i přejmenuje).
+    ///
+    /// Odkazy s explicitní cestou se přepíšou, aby nezůstaly rozbité. Odkazy
+    /// holým názvem se nechávají — pokud je název dál jednoznačný, fungují.
+    pub fn move_note(&mut self, from: &str, to: &str) -> io::Result<MoveReport> {
+        let from_abs = self
+            .absolute(from)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "zdroj mimo workspace"))?;
+        let to_abs = self
+            .absolute(to)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cíl mimo workspace"))?;
+
+        if !to.to_lowercase().ends_with(&format!(".{NOTE_EXT}")) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "poznámka musí mít příponu .txt",
+            ));
+        }
+        if !from_abs.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("poznámka {from} neexistuje"),
+            ));
+        }
+        if from_abs == to_abs {
+            return Ok(MoveReport::default());
+        }
+        if to_abs.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{to} už existuje"),
+            ));
+        }
+
+        let bare_links = self.count_bare_links(strip_ext(from).rsplit('/').next().unwrap_or(""));
+
+        if let Some(parent) = to_abs.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(&from_abs, &to_abs)?;
+
+        let mapping = vec![(strip_ext(from).to_string(), strip_ext(to).to_string())];
+        let mut report = self.rewrite_explicit_links(&mapping)?;
+        report.bare_links = bare_links;
+
+        *self = Workspace::scan(&self.root)?;
+        Ok(report)
+    }
+
+    /// Přesune složku pod jinou složku, čímž z ní udělá podsložku.
+    pub fn move_folder(&mut self, from: &str, to: &str) -> io::Result<MoveReport> {
+        let source = from.trim().trim_end_matches('/');
+        let target = to.trim().trim_end_matches('/');
+
+        let from_abs = self
+            .absolute(source)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "zdroj mimo workspace"))?;
+        let to_abs = self
+            .absolute(target)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cíl mimo workspace"))?;
+
+        if !from_abs.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("složka {source} neexistuje"),
+            ));
+        }
+        if source == target {
+            return Ok(MoveReport::default());
+        }
+        // Složku nelze zanořit do sebe sama ani do vlastní podsložky —
+        // fs::rename by v takovém případě strom rozbil.
+        if target.starts_with(&format!("{source}/")) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "složku nelze přesunout do vlastní podsložky",
+            ));
+        }
+        if to_abs.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{target} už existuje"),
+            ));
+        }
+
+        // Mapa starých a nových cest poznámek se musí spočítat před přesunem.
+        let prefix = format!("{source}/");
+        let mapping: Vec<(String, String)> = self
+            .notes
+            .iter()
+            .filter(|n| n.path.starts_with(&prefix))
+            .map(|n| {
+                let rest = &n.path[source.len()..];
+                (
+                    strip_ext(&n.path).to_string(),
+                    strip_ext(&format!("{target}{rest}")).to_string(),
+                )
+            })
+            .collect();
+
+        if let Some(parent) = to_abs.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(&from_abs, &to_abs)?;
+
+        let report = self.rewrite_explicit_links(&mapping)?;
+
+        *self = Workspace::scan(&self.root)?;
+        Ok(report)
+    }
+
+    /// Kolik odkazů v workspace míří na dané jméno bez uvedení cesty.
+    fn count_bare_links(&self, name: &str) -> usize {
+        let name = lower(name);
+        self.notes
+            .iter()
+            .flat_map(|n| n.links.iter())
+            .filter(|l| {
+                l.kind == LinkKind::Note && !l.target.contains('/') && lower(&l.target) == name
+            })
+            .count()
+    }
+
+    /// Přepíše odkazy s explicitní cestou podle mapy starých a nových cest.
+    ///
+    /// Pracuje přímo nad soubory na disku, ne nad indexem — po přesunu je
+    /// index zastaralý a stejně se hned potom staví znovu.
+    fn rewrite_explicit_links(&self, mapping: &[(String, String)]) -> io::Result<MoveReport> {
+        if mapping.is_empty() {
+            return Ok(MoveReport::default());
+        }
+        let lookup: HashMap<String, &str> = mapping
+            .iter()
+            .map(|(old, new)| (lower(old), new.as_str()))
+            .collect();
+
+        let mut paths = Vec::new();
+        let mut folders = BTreeSet::new();
+        collect_notes(&self.root, &self.root, &mut paths, &mut folders)?;
+
+        let mut report = MoveReport::default();
+
+        for rel in paths {
+            let abs = self.root.join(&rel);
+            let Ok(bytes) = fs::read(&abs) else {
+                continue;
+            };
+            let content = String::from_utf8_lossy(&bytes).into_owned();
+            let note = parse(&content);
+
+            // Od konce, aby dřívější spany zůstaly platné.
+            let mut updated = content.clone();
+            let mut count = 0usize;
+            for link in note.links.iter().rev() {
+                if link.kind != LinkKind::Note || !link.target.contains('/') {
+                    continue;
+                }
+                let Some(new_target) = lookup.get(&lower(&link.target)) else {
+                    continue;
+                };
+                updated.replace_range(
+                    link.span.start..link.span.end,
+                    &render_link(link, new_target),
+                );
+                count += 1;
+            }
+
+            if count > 0 {
+                fs::write(&abs, &updated)?;
+                report.updated_links += count;
+                report.updated_notes += 1;
+            }
+        }
+
+        Ok(report)
+    }
+}
+
+/// Cesta bez přípony `.txt` — tvar, kterým na poznámku míří odkaz.
+fn strip_ext(path: &str) -> &str {
+    path.strip_suffix(&format!(".{NOTE_EXT}")).unwrap_or(path)
+}
+
+/// Cesta relativně ke kořeni, s `/`.
+fn relative_to(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| path.to_string_lossy().into_owned())
+}
+
+/// Poskládá zápis odkazu s novým cílem a zachová kotvu, popisek i embed.
+fn render_link(link: &WikiLink, target: &str) -> String {
+    let mut out = String::new();
+    if link.embed {
+        out.push('!');
+    }
+    out.push_str("[[");
+    out.push_str(target);
+    match &link.anchor {
+        Some(crate::links::Anchor::Section(section)) => {
+            out.push('#');
+            out.push_str(section);
+        }
+        Some(crate::links::Anchor::BlockId(id)) => {
+            out.push_str("#^");
+            out.push_str(id);
+        }
+        None => {}
+    }
+    if let Some(label) = &link.label {
+        out.push('|');
+        out.push_str(label);
+    }
+    out.push_str("]]");
+    out
 }
 
 /// Postaví položku indexu z cesty a obsahu.

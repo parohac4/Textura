@@ -12,6 +12,11 @@ export const saveNote = (path, content) => invoke("save_note", { path, content }
 export const createNote = (path, title) => invoke("create_note", { path, title });
 export const listFolders = () => invoke("list_folders");
 export const createFolder = (path) => invoke("create_folder", { path });
+export const deleteNote = (path) => invoke("delete_note", { path });
+export const deleteFolder = (path, recursive) => invoke("delete_folder", { path, recursive });
+export const countNotesInFolder = (folder) => invoke("count_notes_in_folder", { folder });
+export const moveNote = (from, to) => invoke("move_note", { from, to });
+export const moveFolder = (from, to) => invoke("move_folder", { from, to });
 export const followLink = (fromPath, raw) => invoke("follow_link", { fromPath, raw });
 export const backlinks = (path) => invoke("backlinks", { path });
 export const search = (query) => invoke("search", { query });

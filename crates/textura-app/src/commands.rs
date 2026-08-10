@@ -209,6 +209,50 @@ pub fn create_note(path: String, title: String, state: State<AppState>) -> Res<N
     })
 }
 
+/// Přesune poznámku do koše v `.txtnote/trash/`. Vrací cestu v koši.
+#[tauri::command]
+pub fn delete_note(path: String, state: State<AppState>) -> Res<String> {
+    with_ws_mut(&state, |ws| {
+        ws.delete_note(&path).map_err(|e| format!("{path}: {e}"))
+    })
+}
+
+/// Kolik poznámek je ve složce a jejích podsložkách — pro potvrzovací dialog.
+#[tauri::command]
+pub fn count_notes_in_folder(folder: String, state: State<AppState>) -> Res<usize> {
+    with_ws(&state, |ws| Ok(ws.notes_in_folder(&folder).len()))
+}
+
+/// Přesune složku i s obsahem do koše. `recursive` musí být `true`,
+/// pokud složka není prázdná.
+#[tauri::command]
+pub fn delete_folder(path: String, recursive: bool, state: State<AppState>) -> Res<String> {
+    with_ws_mut(&state, |ws| {
+        ws.delete_folder(&path, recursive)
+            .map_err(|e| format!("{path}: {e}"))
+    })
+}
+
+#[tauri::command]
+pub fn move_note(from: String, to: String, state: State<AppState>) -> Res<MoveOutcome> {
+    with_ws_mut(&state, |ws| {
+        let report = ws
+            .move_note(&from, &to)
+            .map_err(|e| format!("{from} → {to}: {e}"))?;
+        Ok(MoveOutcome::from(report, &to))
+    })
+}
+
+#[tauri::command]
+pub fn move_folder(from: String, to: String, state: State<AppState>) -> Res<MoveOutcome> {
+    with_ws_mut(&state, |ws| {
+        let report = ws
+            .move_folder(&from, &to)
+            .map_err(|e| format!("{from} → {to}: {e}"))?;
+        Ok(MoveOutcome::from(report, &to))
+    })
+}
+
 /// Slovníky, které jsou v systému k dispozici.
 #[tauri::command]
 pub fn available_dictionaries() -> Vec<String> {

@@ -164,6 +164,8 @@ i tam, kde nejsou GTK/WebKit knihovny.
 
 * otevřít složku s poznámkami, strom složek, přehled tagů
 * zakládat poznámky i složky (včetně prázdných a víceúrovňových)
+* pravý klik na poznámku nebo složku otevře menu s přesunem a mazáním
+* přesouvat a přejmenovat poznámky, vnořovat složky do sebe
 * filtrovat podle tagu a fulltextem, s lištou pro zrušení filtru
 * nastavení: motiv (podle systému / světlý / tmavý) a kontrola překlepů
   nad systémovými slovníky
@@ -177,6 +179,24 @@ i tam, kde nejsou GTK/WebKit knihovny.
 * panel zpětných odkazů
 * fulltext přes celý workspace
 * autosave se zachováním původních konců řádků a BOM
+
+### Přesun a mazání
+
+Přesun poznámky nebo složky **opraví odkazy s celou cestou** —
+`[[Projekty/Docker#Instalace|instalaci]]` se stane
+`[[Servery/Docker#Instalace|instalaci]]`, kotva, popisek i embed zůstanou.
+Opraví se i odkazy mezi poznámkami uvnitř přesouvané složky.
+
+Odkazy holým názvem `[[Docker]]` se nepřepisují — po přesunu dál fungují,
+protože se dohledávají podle názvu. Po operaci stavový řádek napíše, kolik
+odkazů se opravilo a kolik jich míří jen názvem. Při **přejmenování** se z nich
+stanou nerozřešené odkazy, na což dialog dopředu upozorní.
+
+Mazání není nevratné: poznámka nebo složka se přesune do
+`.txtnote/trash/<časové razítko>/` uvnitř workspace. Soubory tam zůstávají
+čitelné jako obyčejný text a vrátíš je prostým přesunutím zpět. Aplikace koš
+neindexuje. Neprázdnou složku smaže jen po výslovném potvrzení, které říká,
+kolika poznámek se to týká.
 
 ## Co parser umí
 

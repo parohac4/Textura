@@ -301,3 +301,26 @@ pub struct TagCount {
     pub tag: String,
     pub count: usize,
 }
+
+/// Výsledek přesunu — kolik odkazů se opravilo a na co si dát pozor.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveOutcome {
+    /// Nová cesta.
+    pub path: String,
+    pub updated_links: usize,
+    pub updated_notes: usize,
+    /// Odkazy holým názvem, které se nepřepisovaly.
+    pub bare_links: usize,
+}
+
+impl MoveOutcome {
+    pub fn from(report: textura_core::workspace::MoveReport, path: &str) -> Self {
+        Self {
+            path: path.to_string(),
+            updated_links: report.updated_links,
+            updated_notes: report.updated_notes,
+            bare_links: report.bare_links,
+        }
+    }
+}

@@ -186,6 +186,273 @@ fn prazdna_slozka_prezije_znovunacteni() {
     assert_eq!(reloaded.folders(), vec!["Prazdna"]);
 }
 
+// --- mazání ----------------------------------------------------------------
+
+#[test]
+fn smazana_poznamka_skonci_v_kosi() {
+    let tmp = TempWorkspace::new(
+        "delete-note",
+        &[("Docker.txt", "Docker\n"), ("Server.txt", "Server\n")],
+    );
+    let mut ws = tmp.load();
+
+    let trashed = ws.delete_note("Docker.txt").unwrap();
+
+    assert!(!tmp.root.join("Docker.txt").exists(), "původní soubor je pryč");
+    assert!(tmp.root.join(&trashed).exists(), "kopie je v koši");
+    assert_eq!(
+        fs::read_to_string(tmp.root.join(&trashed)).unwrap(),
+        "Docker\n",
+        "obsah zůstal čitelný"
+    );
+    assert!(trashed.starts_with(".txtnote/trash/"));
+    assert!(ws.index_of_path("Docker.txt").is_none());
+    assert_eq!(ws.notes().len(), 1);
+}
+
+#[test]
+fn kos_se_neindexuje_jako_poznamky() {
+    let tmp = TempWorkspace::new("delete-index", &[("A.txt", "a\n"), ("B.txt", "b\n")]);
+    let mut ws = tmp.load();
+    ws.delete_note("A.txt").unwrap();
+
+    let reloaded = tmp.load();
+    let paths: Vec<_> = reloaded.notes().iter().map(|n| n.path.as_str()).collect();
+    assert_eq!(paths, vec!["B.txt"], "smazaná poznámka se po scanu nevrátí");
+}
+
+#[test]
+fn smazani_neexistujici_poznamky_selze() {
+    let tmp = TempWorkspace::new("delete-missing", &[("A.txt", "a\n")]);
+    let mut ws = tmp.load();
+    assert!(ws.delete_note("Neni.txt").is_err());
+}
+
+#[test]
+fn prazdna_slozka_jde_smazat_rovnou() {
+    let tmp = TempWorkspace::new("delete-empty-folder", &[("A.txt", "a\n")]);
+    let mut ws = tmp.load();
+    ws.create_folder("Prazdna").unwrap();
+
+    ws.delete_folder("Prazdna", false).unwrap();
+
+    assert!(!tmp.root.join("Prazdna").exists());
+    assert!(ws.folders().is_empty());
+}
+
+#[test]
+fn neprazdna_slozka_bez_potvrzeni_neprojde() {
+    let tmp = TempWorkspace::new(
+        "delete-full-folder",
+        &[("Projekty/A.txt", "a\n"), ("Projekty/B.txt", "b\n")],
+    );
+    let mut ws = tmp.load();
+
+    assert!(
+        ws.delete_folder("Projekty", false).is_err(),
+        "neprázdná složka se nesmaže bez vědomého potvrzení"
+    );
+    assert!(tmp.root.join("Projekty/A.txt").exists());
+    assert_eq!(ws.notes_in_folder("Projekty").len(), 2);
+
+    ws.delete_folder("Projekty", true).unwrap();
+    assert!(!tmp.root.join("Projekty").exists());
+    assert!(ws.notes().is_empty());
+}
+
+// --- přesun ----------------------------------------------------------------
+
+#[test]
+fn presun_poznamky_do_slozky() {
+    let tmp = TempWorkspace::new("move-note", &[("Docker.txt", "Docker\n")]);
+    let mut ws = tmp.load();
+    ws.create_folder("Servery").unwrap();
+
+    ws.move_note("Docker.txt", "Servery/Docker.txt").unwrap();
+
+    assert!(!tmp.root.join("Docker.txt").exists());
+    assert_eq!(
+        fs::read_to_string(tmp.root.join("Servery/Docker.txt")).unwrap(),
+        "Docker\n"
+    );
+    assert!(ws.index_of_path("Servery/Docker.txt").is_some());
+}
+
+#[test]
+fn presun_prepise_odkazy_s_explicitni_cestou() {
+    let tmp = TempWorkspace::new(
+        "move-links",
+        &[
+            ("Projekty/Docker.txt", "Docker\n"),
+            (
+                "Index.txt",
+                "Viz [[Projekty/Docker]] a [[Projekty/Docker#Instalace|instalaci]].\n\
+                 Embed: ![[Projekty/Docker]]\n",
+            ),
+        ],
+    );
+    let mut ws = tmp.load();
+
+    let report = ws
+        .move_note("Projekty/Docker.txt", "Servery/Docker.txt")
+        .unwrap();
+
+    assert_eq!(report.updated_links, 3);
+    assert_eq!(report.updated_notes, 1);
+
+    let index = fs::read_to_string(tmp.root.join("Index.txt")).unwrap();
+    assert!(index.contains("[[Servery/Docker]]"), "prostý odkaz: {index}");
+    assert!(
+        index.contains("[[Servery/Docker#Instalace|instalaci]]"),
+        "kotva i popisek zůstaly: {index}"
+    );
+    assert!(index.contains("![[Servery/Docker]]"), "embed zůstal embedem");
+    assert!(!index.contains("Projekty/Docker"));
+}
+
+#[test]
+fn presun_nahlasi_odkazy_holym_nazvem() {
+    let tmp = TempWorkspace::new(
+        "move-bare",
+        &[
+            ("Docker.txt", "Docker\n"),
+            ("Index.txt", "[[Docker]] a ještě [[Docker|kontejnery]]\n"),
+        ],
+    );
+    let mut ws = tmp.load();
+
+    let report = ws.move_note("Docker.txt", "Servery/Docker.txt").unwrap();
+
+    // Holé odkazy se nepřepisují — název zůstal, takže dál fungují.
+    assert_eq!(report.updated_links, 0);
+    assert_eq!(report.bare_links, 2);
+
+    let index = fs::read_to_string(tmp.root.join("Index.txt")).unwrap();
+    assert!(index.contains("[[Docker]]"));
+
+    let from = ws.index_of_path("Index.txt").unwrap();
+    let link = ws.note(from).unwrap().links.first().unwrap();
+    assert_eq!(
+        ws.resolve(link, Some(from)),
+        Resolution::Note(ws.index_of_path("Servery/Docker.txt").unwrap()),
+        "odkaz holým názvem dál míří na přesunutou poznámku"
+    );
+}
+
+#[test]
+fn presun_na_obsazenou_cestu_selze() {
+    let tmp = TempWorkspace::new(
+        "move-conflict",
+        &[("A.txt", "a\n"), ("Slozka/A.txt", "jiné a\n")],
+    );
+    let mut ws = tmp.load();
+
+    assert!(ws.move_note("A.txt", "Slozka/A.txt").is_err());
+    assert_eq!(fs::read_to_string(tmp.root.join("A.txt")).unwrap(), "a\n");
+    assert_eq!(
+        fs::read_to_string(tmp.root.join("Slozka/A.txt")).unwrap(),
+        "jiné a\n"
+    );
+}
+
+#[test]
+fn presun_poznamky_mimo_workspace_selze() {
+    let tmp = TempWorkspace::new("move-escape", &[("A.txt", "a\n")]);
+    let mut ws = tmp.load();
+    assert!(ws.move_note("A.txt", "../unik.txt").is_err());
+    assert!(ws.move_note("A.txt", "unik.sh").is_err(), "cíl musí být .txt");
+}
+
+#[test]
+fn presun_slozky_vytvori_podslozku() {
+    let tmp = TempWorkspace::new(
+        "move-folder",
+        &[("Docker/A.txt", "a\n"), ("Docker/Hloubeji/B.txt", "b\n")],
+    );
+    let mut ws = tmp.load();
+    ws.create_folder("Infrastruktura").unwrap();
+
+    ws.move_folder("Docker", "Infrastruktura/Docker").unwrap();
+
+    assert!(!tmp.root.join("Docker").exists());
+    assert!(tmp.root.join("Infrastruktura/Docker/A.txt").exists());
+    assert!(tmp.root.join("Infrastruktura/Docker/Hloubeji/B.txt").exists());
+    assert!(ws.index_of_path("Infrastruktura/Docker/Hloubeji/B.txt").is_some());
+}
+
+#[test]
+fn presun_slozky_prepise_odkazy_na_vsechny_poznamky_uvnitr() {
+    let tmp = TempWorkspace::new(
+        "move-folder-links",
+        &[
+            ("Docker/A.txt", "a\n"),
+            ("Docker/B.txt", "Soused: [[Docker/A]]\n"),
+            ("Index.txt", "[[Docker/A]] a [[Docker/B]]\n"),
+        ],
+    );
+    let mut ws = tmp.load();
+
+    let report = ws.move_folder("Docker", "Infra/Docker").unwrap();
+    assert_eq!(report.updated_links, 3);
+    assert_eq!(report.updated_notes, 2);
+
+    assert_eq!(
+        fs::read_to_string(tmp.root.join("Index.txt")).unwrap(),
+        "[[Infra/Docker/A]] a [[Infra/Docker/B]]\n"
+    );
+    assert_eq!(
+        fs::read_to_string(tmp.root.join("Infra/Docker/B.txt")).unwrap(),
+        "Soused: [[Infra/Docker/A]]\n",
+        "odkaz mezi poznámkami uvnitř přesouvané složky se také opraví"
+    );
+}
+
+#[test]
+fn slozku_nelze_presunout_do_sebe() {
+    let tmp = TempWorkspace::new("move-folder-into-self", &[("Docker/A.txt", "a\n")]);
+    let mut ws = tmp.load();
+
+    assert!(ws.move_folder("Docker", "Docker/Podslozka").is_err());
+    assert!(tmp.root.join("Docker/A.txt").exists());
+}
+
+#[test]
+fn presun_slozky_na_obsazenou_cestu_selze() {
+    let tmp = TempWorkspace::new(
+        "move-folder-conflict",
+        &[("A/x.txt", "x\n"), ("B/y.txt", "y\n")],
+    );
+    let mut ws = tmp.load();
+    assert!(ws.move_folder("A", "B").is_err());
+    assert!(tmp.root.join("A/x.txt").exists());
+    assert!(tmp.root.join("B/y.txt").exists());
+}
+
+#[test]
+fn prejmenovani_poznamky_presunem() {
+    let tmp = TempWorkspace::new(
+        "rename",
+        &[
+            ("Docker.txt", "Docker\n"),
+            ("Index.txt", "[[Docker]]\n"),
+        ],
+    );
+    let mut ws = tmp.load();
+
+    let report = ws.move_note("Docker.txt", "Docker Engine.txt").unwrap();
+
+    assert!(tmp.root.join("Docker Engine.txt").exists());
+    // Odkaz holým názvem se nepřepsal, takže teď nikam nevede — uživatele
+    // na to musí upozornit UI.
+    assert_eq!(report.bare_links, 1);
+    let from = ws.index_of_path("Index.txt").unwrap();
+    let link = ws.note(from).unwrap().links.first().unwrap();
+    assert!(matches!(
+        ws.resolve(link, Some(from)),
+        Resolution::Unresolved { .. }
+    ));
+}
+
 // --- bezpečnost cest -------------------------------------------------------
 
 /// Vytvoří vedle workspace složku „mimo“ se souborem, který nikdo nemá číst

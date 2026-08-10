@@ -468,6 +468,51 @@ kbd {
   background: color-mix(in srgb, var(--bg-soft) 60%, transparent);
 }
 
+/* --- kontextové menu ----------------------------------------------------- */
+
+#context-menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 190px;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+  list-style: none;
+}
+
+#context-menu[hidden] {
+  display: none;
+}
+
+.menu-heading {
+  overflow: hidden;
+  padding: 5px 10px 7px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#context-menu li button {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 5px;
+  text-align: left;
+  font-size: 13px;
+}
+
+#context-menu li button:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
 /* --- modal --------------------------------------------------------------- */
 
 #modal {
@@ -545,6 +590,19 @@ code.block.conflict {
 #modal-body button.primary:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+#modal-body button.primary.danger {
+  background: var(--section);
+}
+
+#modal-body p.warn {
+  margin-top: 10px;
+  color: var(--link-unresolved);
+}
+
+#modal-body p.warn:empty {
+  display: none;
 }
 
 .checklist {
