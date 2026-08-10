@@ -69,6 +69,17 @@ npm --prefix ui run build
 cargo tauri build
 ```
 
+Bez tauri-cli je potřeba zapnout feature `custom-protocol` ručně — bez ní by
+i release build hledal frontend na vývojovém serveru:
+
+```sh
+npm --prefix ui run build
+cargo build --release -p textura-app --features custom-protocol
+```
+
+Výsledkem je samostatná binárka `target/release/textura-app` s frontendem
+zapečeným uvnitř.
+
 ## Testy
 
 ```sh

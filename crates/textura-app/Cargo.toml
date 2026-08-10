@@ -11,6 +11,12 @@ repository.workspace = true
 name = "textura_app_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
+[features]
+# Produkční build servíruje frontend z assetů zapečených do binárky místo
+# z vývojového serveru na localhostu. `cargo tauri build` si ji zapíná sám,
+# při holém `cargo build --release` ji musíme předat ručně.
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
