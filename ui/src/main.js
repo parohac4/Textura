@@ -122,14 +122,25 @@ async function chooseWorkspace() {
   await loadWorkspace(path);
 }
 
-async function loadWorkspace(path) {
+/**
+ * `remembered` říká, že cesta nepřišla od uživatele, ale z minulého spuštění.
+ * Taková složka se mohla mezitím smazat nebo odejít s odpojeným diskem —
+ * vítat uživatele chybou, o kterou si teď neřekl, nemá smysl, tak se jen
+ * zapomene.
+ */
+async function loadWorkspace(path, { remembered = false } = {}) {
   try {
     state.workspace = await api.openWorkspace(path);
     localStorage.setItem("textura:workspace", path);
     $("status").textContent = `${state.workspace.root} — ${state.workspace.noteCount} poznámek`;
     await Promise.all([loadNotes(), loadTags()]);
   } catch (err) {
-    showError(err);
+    if (!remembered) {
+      showError(err);
+      return;
+    }
+    localStorage.removeItem("textura:workspace");
+    $("status").textContent = `${path} už neexistuje — otevři složku s poznámkami.`;
   }
 }
 
@@ -1444,5 +1455,5 @@ window.addEventListener("beforeunload", () => {
   await applySpellCheck();
   const fromArgs = await api.initialWorkspace().catch(() => null);
   const path = fromArgs || localStorage.getItem("textura:workspace");
-  if (path) await loadWorkspace(path);
+  if (path) await loadWorkspace(path, { remembered: !fromArgs });
 })();
