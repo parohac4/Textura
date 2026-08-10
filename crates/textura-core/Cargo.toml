@@ -1,0 +1,12 @@
+[package]
+name = "textura-core"
+description = "Parser formátu plain-text .txt poznámek pro Texturu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Záměrně bez závislostí: parser musí jít přeložit offline a zůstat
+# přenositelný do jakéhokoli budoucího frontendu (Tauri, CLI, testy).
+[dependencies]

@@ -1,0 +1,11 @@
+Docker
+
+Docker používám pro provoz jednotlivých služeb.
+
+Související poznámky:
+[[MariaDB]]
+[[Mautic]]
+[[Linux]]
+
+#docker
+#server

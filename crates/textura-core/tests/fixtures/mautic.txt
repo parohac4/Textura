@@ -1,0 +1,41 @@
+@title: Produkční Mautic server
+@aliases: Mautic Production, Production Mautic
+@created: 2026-08-10
+@status: active
+
+Produkční Mautic server
+
+Hlavní server pro provoz Mauticu.
+
+== Infrastruktura ==
+
+Operační systém:
+[[Debian]]
+
+Webserver:
+[[Apache]]
+
+Databáze:
+[[MariaDB]]
+
+Deployment používá:
+[[Docker]]
+
+Více informací viz:
+[[Docker#Networking|Docker networking]]
+
+== Úkoly ==
+
+[ ] Aktualizovat Mautic
+[ ] Zkontrolovat zálohy
+[x] Nastavit monitoring
+
+== Dokumentace ==
+
+[[attachments/mautic-architecture.pdf]]
+
+https://mautic.org
+
+#mautic
+#server
+#production
