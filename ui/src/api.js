@@ -17,6 +17,9 @@ export const deleteFolder = (path, recursive) => invoke("delete_folder", { path,
 export const countNotesInFolder = (folder) => invoke("count_notes_in_folder", { folder });
 export const moveNote = (from, to) => invoke("move_note", { from, to });
 export const moveFolder = (from, to) => invoke("move_folder", { from, to });
+export const availableColors = () => invoke("available_colors");
+export const setNoteColor = (path, color) => invoke("set_note_color", { path, color });
+export const setFolderColor = (path, color) => invoke("set_folder_color", { path, color });
 export const followLink = (fromPath, raw) => invoke("follow_link", { fromPath, raw });
 export const backlinks = (path) => invoke("backlinks", { path });
 export const search = (query) => invoke("search", { query });

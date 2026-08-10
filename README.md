@@ -164,8 +164,10 @@ i tam, kde nejsou GTK/WebKit knihovny.
 
 * otevřít složku s poznámkami, strom složek, přehled tagů
 * zakládat poznámky i složky (včetně prázdných a víceúrovňových)
-* pravý klik na poznámku nebo složku otevře menu s přesunem a mazáním
-* přesouvat a přejmenovat poznámky, vnořovat složky do sebe
+* pravý klik na poznámku nebo složku otevře menu s přejmenováním, přesunem,
+  barvou a mazáním
+* přejmenovat a přesouvat poznámky i složky, vnořovat složky do sebe
+* obarvit poznámky i složky osmi barvami
 * filtrovat podle tagu a fulltextem, s lištou pro zrušení filtru
 * nastavení: motiv (podle systému / světlý / tmavý) a kontrola překlepů
   nad systémovými slovníky
@@ -191,6 +193,39 @@ Odkazy holým názvem `[[Docker]]` se nepřepisují — po přesunu dál funguj�
 protože se dohledávají podle názvu. Po operaci stavový řádek napíše, kolik
 odkazů se opravilo a kolik jich míří jen názvem. Při **přejmenování** se z nich
 stanou nerozřešené odkazy, na což dialog dopředu upozorní.
+
+Přejmenování je tatáž operace jako přesun, takže se odkazy opravují stejně.
+
+### Barvy
+
+Poznámka i složka můžou dostat jednu z osmi barev. Ukládá se **název** barvy,
+ne odstín — ten dosazuje motiv, aby zůstala čitelná ve světlém i tmavém.
+
+Poznámka si barvu nese sama jako property přímo v souboru:
+
+```text
+@color: blue
+```
+
+Je tedy vidět i ve `vim`u, dá se najít `grep`em a přežije přesun i
+synchronizaci. Nastavení barvy proto poznámku přepíše; pokud žádné properties
+neměla, dostane blok na začátku.
+
+Složka vlastní soubor nemá, takže její barva jde do `.txtnote/colors.txt`:
+
+```text
+Projekty = blue
+Servery/Produkce = green
+```
+
+Je to jediná věc v aplikaci uložená mimo poznámky. Když se `.txtnote/` smaže,
+barvy složek se ztratí — nic jiného ne. Barva složky se s ní posouvá při
+přesunu i přejmenování a při smazání se ze souboru uklidí.
+
+Hodnotu mimo paletu aplikace ignoruje, takže si `@color` můžeš přepsat na
+cokoli, aniž by se něco rozbilo.
+
+### Koš
 
 Mazání není nevratné: poznámka nebo složka se přesune do
 `.txtnote/trash/<časové razítko>/` uvnitř workspace. Soubory tam zůstávají

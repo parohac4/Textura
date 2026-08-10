@@ -198,10 +198,13 @@ function noteRow(note) {
   row.className = "row" + (state.current?.path === note.path ? " active" : "");
   row.innerHTML = `<span class="row-title"></span><span class="row-sub"></span>`;
   row.querySelector(".row-title").textContent = note.title;
+  if (note.color) row.dataset.color = note.color;
   row.onclick = () => openNote(note.path);
   row.oncontextmenu = (event) =>
     showContextMenu(event, note.title, [
+      ["Přejmenovat…", () => showRenameNote(note)],
       ["Přesunout…", () => showMoveNote(note)],
+      ["Barva…", () => showNoteColor(note)],
       ["Smazat…", () => showDeleteNote(note)],
     ]);
   return row;
@@ -238,7 +241,7 @@ function buildTree(notes) {
   };
 
   // Nejdřív složky z workspace, aby se ve stromu objevily i ty prázdné.
-  for (const folder of state.folders ?? []) descend(folder);
+  for (const folder of state.folders ?? []) descend(folder.path);
   for (const note of notes) descend(note.folder).notes.push(note);
 
   return root;
@@ -285,11 +288,16 @@ function renderTreeNode(parent, node, depth) {
       showNewNote(child.path);
     };
 
+    const color = folderColor(child.path);
+    if (color) row.dataset.color = color;
+
     row.oncontextmenu = (event) =>
       showContextMenu(event, child.path, [
         ["Nová poznámka…", () => showNewNote(child.path)],
         ["Nová podsložka…", () => showNewFolder(child.path)],
+        ["Přejmenovat…", () => showRenameFolder(child.path)],
         ["Přesunout…", () => showMoveFolder(child.path)],
+        ["Barva…", () => showFolderColor(child.path)],
         ["Smazat…", () => showDeleteFolder(child.path)],
       ]);
 
@@ -553,6 +561,216 @@ function folderOptions(select, { exclude = [] } = {}) {
   }
 }
 
+/**
+ * Dialog s jedním textovým polem.
+ *
+ * @param onSubmit dostane zadanou hodnotu
+ * @param validate vrátí chybovou hlášku, nebo null když je hodnota v pořádku
+ */
+function showNameDialog({ title, label, value, hint, submitLabel, validate, onSubmit }) {
+  showModal(title, (body) => {
+    if (hint) {
+      const info = document.createElement("p");
+      info.textContent = hint;
+      body.append(info);
+    }
+
+    const field = document.createElement("label");
+    field.textContent = label;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = value;
+    field.append(input);
+
+    const preview = document.createElement("code");
+    preview.className = "block";
+
+    const confirm = document.createElement("button");
+    confirm.className = "primary";
+    confirm.textContent = submitLabel;
+
+    function update() {
+      const problem = validate(input.value.trim());
+      preview.textContent = problem ?? input.value.trim() ?? "…";
+      preview.className = problem ? "block conflict" : "block";
+      confirm.disabled = Boolean(problem) || !input.value.trim();
+    }
+
+    confirm.onclick = () => {
+      const next = input.value.trim();
+      closeModal();
+      onSubmit(next);
+    };
+    input.oninput = update;
+    input.onkeydown = (event) => {
+      if (event.key === "Enter" && !confirm.disabled) confirm.click();
+    };
+
+    body.append(field, preview, confirm);
+    update();
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 0);
+  });
+}
+
+function showRenameNote(note) {
+  showNameDialog({
+    title: "Přejmenovat poznámku",
+    label: "Nový název",
+    value: note.name,
+    hint: note.path,
+    submitLabel: "Přejmenovat",
+    validate: (next) => {
+      const base = next.replace(/\.txt$/i, "");
+      if (!base) return null;
+      if (base === note.name) return null;
+      if (base.includes("/")) return "název nesmí obsahovat lomítko";
+      const target = note.folder ? `${note.folder}/${base}.txt` : `${base}.txt`;
+      return state.notes.some((n) => n.path.toLowerCase() === target.toLowerCase())
+        ? `${target} — už existuje`
+        : null;
+    },
+    onSubmit: async (next) => {
+      const base = next.replace(/\.txt$/i, "");
+      if (base === note.name) return;
+      const target = note.folder ? `${note.folder}/${base}.txt` : `${base}.txt`;
+      try {
+        const outcome = await api.moveNote(note.path, target);
+        if (state.current?.path === note.path) state.current.path = outcome.path;
+        await loadNotes();
+        await loadTags();
+        if (state.current?.path === outcome.path) await openNote(outcome.path);
+        reportMove(outcome);
+      } catch (err) {
+        showError(err);
+      }
+    },
+  });
+}
+
+function showRenameFolder(path) {
+  const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+  const name = path.split("/").pop();
+
+  showNameDialog({
+    title: "Přejmenovat složku",
+    label: "Nový název",
+    value: name,
+    hint: path,
+    submitLabel: "Přejmenovat",
+    validate: (next) => {
+      if (!next || next === name) return null;
+      if (next.includes("/")) return "název nesmí obsahovat lomítko";
+      const target = parent ? `${parent}/${next}` : next;
+      return (state.folders ?? []).some((f) => f.path === target)
+        ? `${target} — už existuje`
+        : null;
+    },
+    onSubmit: async (next) => {
+      if (next === name) return;
+      const target = parent ? `${parent}/${next}` : next;
+      try {
+        const outcome = await api.moveFolder(path, target);
+        remapExpanded(path, target);
+        const current = state.current?.path;
+        if (current?.startsWith(`${path}/`)) {
+          state.current.path = target + current.slice(path.length);
+        }
+        await loadNotes();
+        await loadTags();
+        if (state.current) await openNote(state.current.path);
+        reportMove(outcome);
+      } catch (err) {
+        showError(err);
+      }
+    },
+  });
+}
+
+/** Rozbalený stav složek se posune spolu s přejmenovanou či přesunutou složkou. */
+function remapExpanded(from, to) {
+  for (const open of [...state.expanded]) {
+    if (open === from || open.startsWith(`${from}/`)) {
+      state.expanded.delete(open);
+      state.expanded.add(to + open.slice(from.length));
+    }
+  }
+  state.expanded.add(to);
+  localStorage.setItem("textura:expanded", JSON.stringify([...state.expanded]));
+}
+
+// --- barvy -----------------------------------------------------------------
+
+/** Dialog s paletou. `current` je aktuální barva, `onPick` dostane novou nebo null. */
+function showColorPicker(title, hint, current, onPick) {
+  showModal(title, (body) => {
+    const info = document.createElement("p");
+    info.textContent = hint;
+
+    const palette = document.createElement("div");
+    palette.className = "palette";
+
+    for (const color of state.colors ?? []) {
+      const swatch = document.createElement("button");
+      swatch.className = "swatch" + (color === current ? " active" : "");
+      swatch.dataset.color = color;
+      swatch.title = color;
+      swatch.onclick = () => {
+        closeModal();
+        onPick(color);
+      };
+      palette.append(swatch);
+    }
+
+    const clear = document.createElement("button");
+    clear.className = "ghost";
+    clear.textContent = "Bez barvy";
+    clear.onclick = () => {
+      closeModal();
+      onPick(null);
+    };
+
+    body.append(info, palette, clear);
+  });
+}
+
+function showNoteColor(note) {
+  showColorPicker(
+    "Barva poznámky",
+    "Uloží se do poznámky jako @color, takže ji uvidíš i v obyčejném textovém editoru.",
+    note.color ?? null,
+    async (color) => {
+      try {
+        await api.setNoteColor(note.path, color);
+        await loadNotes();
+        // Barva je property, takže se změnil i obsah otevřené poznámky.
+        if (state.current?.path === note.path) await openNote(note.path);
+      } catch (err) {
+        showError(err);
+      }
+    },
+  );
+}
+
+function showFolderColor(path) {
+  showColorPicker(
+    "Barva složky",
+    "Složka nemá vlastní soubor, barva se proto ukládá do .txtnote/colors.txt.",
+    folderColor(path),
+    async (color) => {
+      try {
+        await api.setFolderColor(path, color);
+        state.folders = await api.listFolders();
+        renderView();
+      } catch (err) {
+        showError(err);
+      }
+    },
+  );
+}
+
 function showMoveNote(note) {
   showModal(`Přesunout poznámku`, (body) => {
     const info = document.createElement("p");
@@ -657,7 +875,7 @@ function showMoveFolder(path) {
     function update() {
       const target = targetPath();
       const same = target === path;
-      const taken = !same && (state.folders ?? []).includes(target);
+      const taken = !same && (state.folders ?? []).some((f) => f.path === target);
       preview.textContent = taken ? `${target} — už existuje` : target;
       preview.className = taken ? "block conflict" : "block";
       confirm.disabled = same || taken;
@@ -668,15 +886,7 @@ function showMoveFolder(path) {
       closeModal();
       try {
         const outcome = await api.moveFolder(path, target);
-        // Rozbalený stav se posune spolu se složkou.
-        for (const open of [...state.expanded]) {
-          if (open === path || open.startsWith(`${path}/`)) {
-            state.expanded.delete(open);
-            state.expanded.add(target + open.slice(path.length));
-          }
-        }
-        state.expanded.add(target);
-        localStorage.setItem("textura:expanded", JSON.stringify([...state.expanded]));
+        remapExpanded(path, target);
 
         const current = state.current?.path;
         if (current?.startsWith(`${path}/`)) {
@@ -806,7 +1016,14 @@ function closeNote() {
 
 /** Složky, které ve workspace existují — včetně prázdných. */
 function existingFolders() {
-  return [...(state.folders ?? [])].sort((a, b) => a.localeCompare(b, "cs"));
+  return (state.folders ?? [])
+    .map((f) => f.path)
+    .sort((a, b) => a.localeCompare(b, "cs"));
+}
+
+/** Barva složky, pokud je nastavená. */
+function folderColor(path) {
+  return (state.folders ?? []).find((f) => f.path === path)?.color ?? null;
 }
 
 /** Dialog „nová složka“. `preselect` je nadřazená složka. */
@@ -848,7 +1065,7 @@ function showNewFolder(preselect = "") {
 
     function updatePreview() {
       const path = targetPath();
-      const exists = path && (state.folders ?? []).some((f) => f === path);
+      const exists = path && (state.folders ?? []).some((f) => f.path === path);
       preview.textContent = exists ? `${path} — už existuje` : path || "…";
       preview.className = exists ? "block conflict" : "block";
       confirm.disabled = !path || exists;
@@ -1170,6 +1387,7 @@ window.addEventListener("beforeunload", () => {
 
 // Při startu: složka z příkazové řádky, jinak ta naposledy otevřená.
 (async () => {
+  state.colors = await api.availableColors().catch(() => []);
   await applySpellCheck();
   const fromArgs = await api.initialWorkspace().catch(() => null);
   const path = fromArgs || localStorage.getItem("textura:workspace");

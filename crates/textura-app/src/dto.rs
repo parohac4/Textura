@@ -25,6 +25,7 @@ pub struct NoteSummary {
     pub title: String,
     pub folder: String,
     pub tags: Vec<String>,
+    pub color: Option<String>,
 }
 
 impl NoteSummary {
@@ -35,8 +36,17 @@ impl NoteSummary {
             title: note.title.clone(),
             folder: note.folder.clone(),
             tags: note.tags.clone(),
+            color: note.color.clone(),
         }
     }
+}
+
+/// Složka pro strom v UI.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderInfo {
+    pub path: String,
+    pub color: Option<String>,
 }
 
 /// Jeden zvýrazněný úsek textu.

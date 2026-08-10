@@ -20,6 +20,35 @@ pub const DATA_DIR: &str = ".txtnote";
 /// Koš uvnitř `.txtnote/`. Smazané poznámky se sem přesouvají, aby šlo
 /// překliknutí vzít zpět — soubory tam zůstávají čitelné jako obyčejný text.
 pub const TRASH_DIR: &str = "trash";
+/// Barvy složek. Složka nemá vlastní soubor, kam by se daly zapsat, takže
+/// jako jediné jsou uložené mimo poznámky.
+pub const COLORS_FILE: &str = "colors.txt";
+/// Property, ve které si poznámka nese svoji barvu.
+pub const COLOR_PROPERTY: &str = "color";
+
+/// Povolené barvy. Ukládá se název, ne konkrétní odstín — ten si dosadí UI
+/// podle motivu, takže poznámka zůstane čitelná i po přepnutí na tmavý.
+pub const COLORS: [&str; 8] = [
+    "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink",
+];
+
+/// Ověří, že barva patří do palety.
+fn check_color(color: Option<&str>) -> io::Result<Option<String>> {
+    match color {
+        None => Ok(None),
+        Some(c) => {
+            let c = c.trim().to_lowercase();
+            if COLORS.contains(&c.as_str()) {
+                Ok(Some(c))
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("neznámá barva: {c}"),
+                ))
+            }
+        }
+    }
+}
 
 /// Co se stalo s odkazy při přesunu.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -49,6 +78,8 @@ pub struct IndexedNote {
     pub tags: Vec<String>,
     pub links: Vec<WikiLink>,
     pub content: String,
+    /// Barva z `@color`, pokud je nastavená a patří do palety.
+    pub color: Option<String>,
 }
 
 impl IndexedNote {
@@ -102,6 +133,8 @@ pub struct Workspace {
     /// Všechny složky workspace, seřazené. Sledují se zvlášť od poznámek,
     /// protože prázdná složka se z cest poznámek odvodit nedá.
     folders: BTreeSet<String>,
+    /// Barvy složek načtené z `.txtnote/colors.txt`.
+    folder_colors: std::collections::BTreeMap<String, String>,
     by_path: HashMap<String, usize>,
     by_name: HashMap<String, Vec<usize>>,
     by_alias: HashMap<String, Vec<usize>>,
@@ -160,6 +193,7 @@ impl Workspace {
             folders,
             ..Default::default()
         };
+        ws.folder_colors = ws.load_folder_colors();
 
         for rel in paths {
             let abs = ws.root.join(&rel);
@@ -570,6 +604,98 @@ impl Workspace {
         self.notes.get(index).map(|n| parse(&n.content))
     }
 
+    // --- barvy -------------------------------------------------------------
+
+    fn colors_path(&self) -> PathBuf {
+        self.root.join(DATA_DIR).join(COLORS_FILE)
+    }
+
+    /// Načte barvy složek. Chybějící nebo poškozený soubor není chyba —
+    /// barvy jsou ozdoba, ne data, bez kterých by workspace nešel otevřít.
+    fn load_folder_colors(&self) -> std::collections::BTreeMap<String, String> {
+        let mut out = std::collections::BTreeMap::new();
+        let Ok(text) = fs::read_to_string(self.colors_path()) else {
+            return out;
+        };
+
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((path, color)) = line.split_once('=') else {
+                continue;
+            };
+            let path = path.trim();
+            let color = color.trim().to_lowercase();
+            if !path.is_empty() && COLORS.contains(&color.as_str()) {
+                out.insert(path.to_string(), color);
+            }
+        }
+        out
+    }
+
+    fn save_folder_colors(&self) -> io::Result<()> {
+        let path = self.colors_path();
+        if self.folder_colors.is_empty() {
+            // Prázdný soubor nemá smysl udržovat.
+            if path.exists() {
+                fs::remove_file(&path)?;
+            }
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut text = String::from(
+            "# Barvy složek pro aplikaci Textura.\n\
+             # Řádky ve tvaru: cesta = barva\n\
+             # Poznámky si barvu nesou samy v property @color.\n\n",
+        );
+        for (folder, color) in &self.folder_colors {
+            text.push_str(&format!("{folder} = {color}\n"));
+        }
+        fs::write(path, text)
+    }
+
+    /// Barva složky, pokud je nastavená.
+    pub fn folder_color(&self, folder: &str) -> Option<&str> {
+        self.folder_colors.get(folder).map(String::as_str)
+    }
+
+    /// Všechny barvy složek.
+    pub fn folder_colors(&self) -> Vec<(&str, &str)> {
+        self.folder_colors
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect()
+    }
+
+    /// Nastaví nebo zruší barvu složky.
+    pub fn set_folder_color(&mut self, folder: &str, color: Option<&str>) -> io::Result<()> {
+        let folder = folder.trim().trim_end_matches('/').to_string();
+        if !self.folders.contains(&folder) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("složka {folder} neexistuje"),
+            ));
+        }
+        match check_color(color)? {
+            Some(color) => self.folder_colors.insert(folder, color),
+            None => self.folder_colors.remove(&folder),
+        };
+        self.save_folder_colors()
+    }
+
+    /// Nastaví nebo zruší barvu poznámky zápisem property `@color`.
+    pub fn set_note_color(&mut self, rel_path: &str, color: Option<&str>) -> io::Result<usize> {
+        let color = check_color(color)?;
+        let content = self.read(rel_path)?;
+        let updated = crate::properties::set(&content, COLOR_PROPERTY, color.as_deref());
+        self.write(rel_path, &updated)
+    }
+
     // --- mazání ------------------------------------------------------------
 
     /// Poznámky ve složce a všech jejích podsložkách.
@@ -651,6 +777,12 @@ impl Workspace {
 
         let dest = self.trash_target(folder)?;
         fs::rename(&abs, &dest)?;
+
+        // Barvy smazaných složek by jinak zůstaly v souboru napořád.
+        let prefix = format!("{folder}/");
+        self.folder_colors
+            .retain(|path, _| path != folder && !path.starts_with(&prefix));
+        self.save_folder_colors()?;
 
         *self = Workspace::scan(&self.root)?;
         Ok(relative_to(&self.root, &dest))
@@ -762,6 +894,24 @@ impl Workspace {
             fs::create_dir_all(parent)?;
         }
         fs::rename(&from_abs, &to_abs)?;
+
+        // Barva patří složce, ne cestě — po přesunu i přejmenování zůstává.
+        let prefix = format!("{source}/");
+        self.folder_colors = self
+            .folder_colors
+            .iter()
+            .map(|(path, color)| {
+                let moved = if path == source {
+                    target.to_string()
+                } else if path.starts_with(&prefix) {
+                    format!("{target}{}", &path[source.len()..])
+                } else {
+                    path.clone()
+                };
+                (moved, color.clone())
+            })
+            .collect();
+        self.save_folder_colors()?;
 
         let report = self.rewrite_explicit_links(&mapping)?;
 
@@ -893,6 +1043,12 @@ fn build_indexed(rel_path: String, content: String) -> IndexedNote {
         aliases: note.aliases(),
         tags: note.all_tags(),
         links: note.links.clone(),
+        // Neznámou hodnotu ignorujeme — uživatel mohl do souboru napsat
+        // cokoli a UI nemá co dosazovat za barvu, kterou nezná.
+        color: note
+            .property(COLOR_PROPERTY)
+            .map(|p| p.value.trim().to_lowercase())
+            .filter(|c| COLORS.contains(&c.as_str())),
         path: rel_path,
         name,
         folder,

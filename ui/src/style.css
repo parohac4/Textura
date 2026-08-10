@@ -16,6 +16,17 @@
   --done: #9aa1ae;
   --mono: ui-monospace, "JetBrains Mono", "Fira Code", "DejaVu Sans Mono", monospace;
   --sans: system-ui, "Segoe UI", sans-serif;
+
+  /* Paleta pro poznámky a složky. Ukládá se jen název barvy, odstín si
+     dosazuje motiv, aby zůstala čitelná i na tmavém pozadí. */
+  --c-red: #d33d5a;
+  --c-orange: #cc6c14;
+  --c-yellow: #b08900;
+  --c-green: #3f8a2c;
+  --c-teal: #0e8a8a;
+  --c-blue: #2f6fd0;
+  --c-purple: #7a4dc4;
+  --c-pink: #c2478f;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -33,6 +44,14 @@
     --tag: #9ece6a;
     --section: #f7768e;
     --done: #5c6370;
+    --c-red: #f7768e;
+    --c-orange: #ff9e64;
+    --c-yellow: #e0af68;
+    --c-green: #9ece6a;
+    --c-teal: #2ac3de;
+    --c-blue: #7aa2f7;
+    --c-purple: #bb9af7;
+    --c-pink: #f78ec0;
   }
 }
 
@@ -50,6 +69,14 @@
   --tag: #9ece6a;
   --section: #f7768e;
   --done: #5c6370;
+  --c-red: #f7768e;
+  --c-orange: #ff9e64;
+  --c-yellow: #e0af68;
+  --c-green: #9ece6a;
+  --c-teal: #2ac3de;
+  --c-blue: #7aa2f7;
+  --c-purple: #bb9af7;
+  --c-pink: #f78ec0;
 }
 
 * {
@@ -208,6 +235,57 @@ button.primary {
 
 .mono {
   font-family: var(--mono);
+}
+
+/* --- barvy poznámek a složek --------------------------------------------- */
+
+[data-color="red"] { --row-color: var(--c-red); }
+[data-color="orange"] { --row-color: var(--c-orange); }
+[data-color="yellow"] { --row-color: var(--c-yellow); }
+[data-color="green"] { --row-color: var(--c-green); }
+[data-color="teal"] { --row-color: var(--c-teal); }
+[data-color="blue"] { --row-color: var(--c-blue); }
+[data-color="purple"] { --row-color: var(--c-purple); }
+[data-color="pink"] { --row-color: var(--c-pink); }
+
+/* Barevný proužek u kraje řádku. Aktivní poznámka má proužek akcentní,
+   proto je barva až za ním. */
+.row[data-color],
+.folder-row[data-color] {
+  box-shadow: inset 3px 0 0 var(--row-color);
+}
+
+.row[data-color].active {
+  box-shadow: inset 3px 0 0 var(--row-color), inset 6px 0 0 var(--accent);
+}
+
+.row[data-color] .row-title,
+.folder-row[data-color] .folder-name {
+  color: var(--row-color);
+}
+
+.palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+
+.swatch {
+  width: 30px;
+  height: 30px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: var(--row-color);
+}
+
+.swatch:hover {
+  border-color: var(--text);
+}
+
+.swatch.active {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--bg-soft) inset;
 }
 
 /* --- strom složek -------------------------------------------------------- */

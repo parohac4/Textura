@@ -186,6 +186,140 @@ fn prazdna_slozka_prezije_znovunacteni() {
     assert_eq!(reloaded.folders(), vec!["Prazdna"]);
 }
 
+// --- barvy -----------------------------------------------------------------
+
+#[test]
+fn barva_poznamky_se_uklada_do_property() {
+    let tmp = TempWorkspace::new("color-note", &[("Docker.txt", "Docker\n\nText\n")]);
+    let mut ws = tmp.load();
+
+    ws.set_note_color("Docker.txt", Some("blue")).unwrap();
+
+    // Barva je vidět v samotném souboru, ne ve skryté databázi.
+    assert_eq!(
+        fs::read_to_string(tmp.root.join("Docker.txt")).unwrap(),
+        "@color: blue\n\nDocker\n\nText\n"
+    );
+    assert_eq!(
+        ws.note(ws.index_of_path("Docker.txt").unwrap())
+            .unwrap()
+            .color
+            .as_deref(),
+        Some("blue")
+    );
+}
+
+#[test]
+fn barva_poznamky_prezije_znovunacteni_a_da_se_zrusit() {
+    let tmp = TempWorkspace::new("color-note-reload", &[("A.txt", "@title: A\n\nText\n")]);
+    let mut ws = tmp.load();
+    ws.set_note_color("A.txt", Some("green")).unwrap();
+
+    let reloaded = tmp.load();
+    assert_eq!(reloaded.notes()[0].color.as_deref(), Some("green"));
+
+    ws.set_note_color("A.txt", None).unwrap();
+    assert_eq!(
+        fs::read_to_string(tmp.root.join("A.txt")).unwrap(),
+        "@title: A\n\nText\n",
+        "zrušení barvy vrátí soubor do původní podoby"
+    );
+    assert!(tmp.load().notes()[0].color.is_none());
+}
+
+#[test]
+fn barva_poznamky_cestuje_s_ni_pri_presunu() {
+    let tmp = TempWorkspace::new("color-move", &[("A.txt", "A\n")]);
+    let mut ws = tmp.load();
+    ws.set_note_color("A.txt", Some("red")).unwrap();
+    ws.create_folder("Slozka").unwrap();
+
+    ws.move_note("A.txt", "Slozka/A.txt").unwrap();
+
+    assert_eq!(
+        ws.note(ws.index_of_path("Slozka/A.txt").unwrap())
+            .unwrap()
+            .color
+            .as_deref(),
+        Some("red")
+    );
+}
+
+#[test]
+fn barva_slozky_se_uklada_do_txtnote() {
+    let tmp = TempWorkspace::new("color-folder", &[("Projekty/A.txt", "a\n")]);
+    let mut ws = tmp.load();
+
+    ws.set_folder_color("Projekty", Some("purple")).unwrap();
+
+    assert_eq!(ws.folder_color("Projekty"), Some("purple"));
+    let soubor = fs::read_to_string(tmp.root.join(".txtnote/colors.txt")).unwrap();
+    assert!(soubor.contains("Projekty = purple"), "soubor: {soubor}");
+    assert_eq!(tmp.load().folder_color("Projekty"), Some("purple"));
+}
+
+#[test]
+fn zruseni_posledni_barvy_slozky_smaze_soubor() {
+    let tmp = TempWorkspace::new("color-folder-clear", &[("Projekty/A.txt", "a\n")]);
+    let mut ws = tmp.load();
+    ws.set_folder_color("Projekty", Some("teal")).unwrap();
+    assert!(tmp.root.join(".txtnote/colors.txt").exists());
+
+    ws.set_folder_color("Projekty", None).unwrap();
+
+    assert!(!tmp.root.join(".txtnote/colors.txt").exists());
+    assert!(tmp.load().folder_color("Projekty").is_none());
+}
+
+#[test]
+fn barva_slozky_jde_s_ni_pri_presunu_a_zmizi_pri_smazani() {
+    let tmp = TempWorkspace::new(
+        "color-folder-move",
+        &[("Docker/A.txt", "a\n"), ("Docker/Hloubeji/B.txt", "b\n")],
+    );
+    let mut ws = tmp.load();
+    ws.create_folder("Infra").unwrap();
+    ws.set_folder_color("Docker", Some("blue")).unwrap();
+    ws.set_folder_color("Docker/Hloubeji", Some("pink")).unwrap();
+
+    ws.move_folder("Docker", "Infra/Docker").unwrap();
+
+    assert_eq!(ws.folder_color("Infra/Docker"), Some("blue"));
+    assert_eq!(ws.folder_color("Infra/Docker/Hloubeji"), Some("pink"));
+    assert!(ws.folder_color("Docker").is_none());
+
+    ws.delete_folder("Infra/Docker", true).unwrap();
+    assert!(ws.folder_color("Infra/Docker").is_none());
+    assert!(ws.folder_color("Infra/Docker/Hloubeji").is_none());
+}
+
+#[test]
+fn barva_mimo_paletu_se_odmitne() {
+    let tmp = TempWorkspace::new("color-invalid", &[("A.txt", "a\n")]);
+    let mut ws = tmp.load();
+    ws.create_folder("S").unwrap();
+
+    assert!(ws.set_note_color("A.txt", Some("#ff0000")).is_err());
+    assert!(ws.set_note_color("A.txt", Some("duhová")).is_err());
+    assert!(ws.set_folder_color("S", Some("nic")).is_err());
+    assert_eq!(fs::read_to_string(tmp.root.join("A.txt")).unwrap(), "a\n");
+}
+
+#[test]
+fn neznama_barva_v_souboru_se_ignoruje() {
+    // Uživatel mohl do poznámky napsat cokoli; UI nemá co dosazovat.
+    let tmp = TempWorkspace::new("color-unknown", &[("A.txt", "@color: mourovatá\n\nA\n")]);
+    let ws = tmp.load();
+    assert!(ws.notes()[0].color.is_none());
+}
+
+#[test]
+fn barva_slozky_pro_neexistujici_slozku_selze() {
+    let tmp = TempWorkspace::new("color-folder-missing", &[("A.txt", "a\n")]);
+    let mut ws = tmp.load();
+    assert!(ws.set_folder_color("Neexistuje", Some("red")).is_err());
+}
+
 // --- mazání ----------------------------------------------------------------
 
 #[test]

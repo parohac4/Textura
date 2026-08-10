@@ -269,23 +269,60 @@ pub fn set_spell_check(
     crate::spellcheck::apply(&window, enabled, languages)
 }
 
+fn folder_list(ws: &Workspace) -> Vec<FolderInfo> {
+    ws.folders()
+        .into_iter()
+        .map(|path| FolderInfo {
+            color: ws.folder_color(path).map(str::to_string),
+            path: path.to_string(),
+        })
+        .collect()
+}
+
 /// Složky workspace, včetně prázdných.
 #[tauri::command]
-pub fn list_folders(state: State<AppState>) -> Res<Vec<String>> {
-    with_ws(&state, |ws| {
-        Ok(ws.folders().into_iter().map(String::from).collect())
-    })
+pub fn list_folders(state: State<AppState>) -> Res<Vec<FolderInfo>> {
+    with_ws(&state, |ws| Ok(folder_list(ws)))
 }
 
 #[tauri::command]
-pub fn create_folder(path: String, state: State<AppState>) -> Res<Vec<String>> {
+pub fn create_folder(path: String, state: State<AppState>) -> Res<Vec<FolderInfo>> {
     with_ws_mut(&state, |ws| {
         ws.create_folder(&path).map_err(|e| match e.kind() {
             std::io::ErrorKind::AlreadyExists => format!("složka {path} už existuje"),
             std::io::ErrorKind::InvalidInput => format!("neplatný název složky: {path}"),
             _ => format!("{path}: {e}"),
         })?;
-        Ok(ws.folders().into_iter().map(String::from).collect())
+        Ok(folder_list(ws))
+    })
+}
+
+/// Paleta barev, ze které si UI vybírá.
+#[tauri::command]
+pub fn available_colors() -> Vec<String> {
+    textura_core::workspace::COLORS
+        .iter()
+        .map(|c| c.to_string())
+        .collect()
+}
+
+/// Nastaví barvu poznámky. `None` barvu zruší.
+#[tauri::command]
+pub fn set_note_color(path: String, color: Option<String>, state: State<AppState>) -> Res<()> {
+    with_ws_mut(&state, |ws| {
+        ws.set_note_color(&path, color.as_deref())
+            .map_err(|e| format!("{path}: {e}"))?;
+        Ok(())
+    })
+}
+
+/// Nastaví barvu složky. `None` barvu zruší.
+#[tauri::command]
+pub fn set_folder_color(path: String, color: Option<String>, state: State<AppState>) -> Res<()> {
+    with_ws_mut(&state, |ws| {
+        ws.set_folder_color(&path, color.as_deref())
+            .map_err(|e| format!("{path}: {e}"))?;
+        Ok(())
     })
 }
 
