@@ -305,6 +305,7 @@ function renderTreeNode(parent, node, depth) {
     row.oncontextmenu = (event) =>
       showContextMenu(event, child.path, [
         ["Nová poznámka…", () => showNewNote(child.path)],
+        ["Nová poznámka s datem", () => createDatedNote(child.path)],
         ["Nová podsložka…", () => showNewFolder(child.path)],
         ["Přejmenovat…", () => showRenameFolder(child.path)],
         ["Přesunout…", () => showMoveFolder(child.path)],
@@ -1156,6 +1157,56 @@ function showNewFolder(preselect = "") {
   });
 }
 
+/** Nová poznámka má být hned vidět ve stromu i v editoru. */
+async function revealCreated(created) {
+  if (created.folder) {
+    let acc = "";
+    for (const segment of created.folder.split("/")) {
+      acc = acc ? `${acc}/${segment}` : segment;
+      state.expanded.add(acc);
+    }
+    localStorage.setItem("textura:expanded", JSON.stringify([...state.expanded]));
+  }
+  $("search").value = "";
+  state.view = { mode: "tree" };
+  await loadNotes();
+  await openNote(created.path);
+}
+
+/** Složka, ve které se uživatel právě nachází — podle otevřené poznámky. */
+function currentFolder() {
+  const path = state.current?.path ?? "";
+  const cut = path.lastIndexOf("/");
+  return cut === -1 ? "" : path.slice(0, cut);
+}
+
+/**
+ * Poznámka pojmenovaná aktuálním datem a časem, bez ptaní.
+ *
+ * V názvu souboru je čas s pomlčkami — dvojtečka na některých systémech
+ * v názvu souboru nefunguje. V nadpisu uvnitř poznámky zůstává běžný tvar.
+ */
+async function createDatedNote(folder = currentFolder()) {
+  if (!state.workspace) {
+    showError("nejdřív otevři složku s poznámkami");
+    return;
+  }
+
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const time = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+  const name = `${date} ${time}`;
+  const path = folder ? `${folder}/${name}.txt` : `${name}.txt`;
+
+  try {
+    const created = await api.createNote(path, `${date} ${time.replace(/-/g, ":")}`);
+    await revealCreated(created);
+  } catch (err) {
+    showError(err);
+  }
+}
+
 /** Dialog „nová poznámka“. `preselect` je složka, do které se má založit. */
 function showNewNote(preselect = "") {
   if (!state.workspace) {
@@ -1232,19 +1283,7 @@ function showNewNote(preselect = "") {
       closeModal();
       try {
         const created = await api.createNote(path, name.value.trim().replace(/\.txt$/i, ""));
-        // Nová poznámka má být hned vidět i ve stromu.
-        if (created.folder) {
-          let acc = "";
-          for (const segment of created.folder.split("/")) {
-            acc = acc ? `${acc}/${segment}` : segment;
-            state.expanded.add(acc);
-          }
-          localStorage.setItem("textura:expanded", JSON.stringify([...state.expanded]));
-        }
-        $("search").value = "";
-        state.view = { mode: "tree" };
-        await loadNotes();
-        await openNote(created.path);
+        await revealCreated(created);
       } catch (err) {
         showError(err);
       }
@@ -1405,6 +1444,7 @@ function showError(err) {
 
 $("open-workspace").onclick = chooseWorkspace;
 $("new-note").onclick = () => showNewNote();
+$("new-dated-note").onclick = () => createDatedNote();
 $("new-folder").onclick = () => showNewFolder();
 $("settings").onclick = showSettings;
 $("reload").onclick = reload;
@@ -1434,9 +1474,13 @@ document.addEventListener("keydown", (event) => {
       if (inSearch && state.current) view.focus();
     }
   }
-  if ((event.ctrlKey || event.metaKey) && event.key === "n") {
+  if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "n") {
     event.preventDefault();
     showNewNote();
+  }
+  if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "n") {
+    event.preventDefault();
+    createDatedNote();
   }
   if ((event.ctrlKey || event.metaKey) && event.key === "f") {
     // Bez preventDefault by webview otevřel vlastní hledání v stránce.

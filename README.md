@@ -164,6 +164,9 @@ i tam, kde nejsou GTK/WebKit knihovny.
 
 * otevřít složku s poznámkami, strom složek, přehled tagů
 * zakládat poznámky i složky (včetně prázdných a víceúrovňových)
+* tlačítko **+ Datum** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd>) založí bez
+  ptaní poznámku pojmenovanou aktuálním datem a časem, a to ve složce právě
+  otevřené poznámky
 * pravý klik na poznámku nebo složku otevře menu s přejmenováním, přesunem,
   barvou a mazáním
 * přejmenovat a přesouvat poznámky i složky, vnořovat složky do sebe

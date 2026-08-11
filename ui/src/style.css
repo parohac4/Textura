@@ -1,6 +1,9 @@
 /* Světlý motiv je základ; tmavý se aplikuje dvakrát — jednou podle systému
    (pokud si uživatel nevynutil světlý) a jednou podle volby v nastavení. */
 :root {
+  /* Rozbalený seznam <select> kreslí webview sám podle color-scheme; bez toho
+     by v tmavém motivu zůstal světlý a nečitelný. */
+  color-scheme: light;
   --bg: #ffffff;
   --bg-soft: #f5f6f8;
   --bg-row: #eceef2;
@@ -33,6 +36,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #16181f;
     --bg-soft: #1c1e26;
     --bg-row: #232630;
@@ -60,6 +64,7 @@
 }
 
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --bg: #16181f;
   --bg-soft: #1c1e26;
   --bg-row: #232630;
@@ -131,6 +136,8 @@ aside {
 
 .pane-head.toolbar button {
   flex: 1;
+  padding: 5px 6px;
+  white-space: nowrap;
 }
 
 .pane-head.sub {
@@ -683,6 +690,12 @@ code.block.conflict {
   color: var(--text);
   font: inherit;
   font-size: 13px;
+}
+
+/* Některé webview kreslí položky seznamu vlastní paletou; ať drží motiv. */
+#modal-body select option {
+  background: var(--bg);
+  color: var(--text);
 }
 
 #modal-body input:focus,
