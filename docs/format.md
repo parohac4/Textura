@@ -494,6 +494,117 @@ Tato funkce není nutná pro MVP.
 
 ---
 
+## Mind mapy
+
+Mind mapa není zvláštní formát ani zvláštní soubor. Je to obyčejný odsazený
+seznam, který otevírá řádek `@mapa`:
+
+```text
+@mapa Infrastruktura
+- Produkční server ^server
+  - [[Docker]] @color:blue ^docker
+    - běží v něm pět služeb
+  - [[MariaDB|databáze]] ^db
+  - poznámka bez odkazu
+@spoje
+- docker -- db
+```
+
+Odsazení určuje zanoření. Uzel je prostý text, takže do něj patří vlastní popis,
+wiki odkaz na poznámku, nebo obojí — `[[Docker|kontejnery]]`. Odkaz v uzlu je
+běžný odkaz: dohledává se stejným resolverem a počítá se do backlinků.
+
+Pravidla:
+
+* mapu otevírá řádek, na kterém je jen `@mapa`, volitelně s názvem
+  (`@mindmap` je synonymum, porovnává se case-insensitive),
+* bez dvojtečky — `@mapa: něco` na začátku souboru by byla property poznámky,
+* uzly jsou položky seznamu `- text`, odsazení počítá tabulátor za čtyři mezery,
+* seznam uzlů končí prvním řádkem, který položkou seznamu není, tedy i prázdným,
+* mapa může mít víc kořenů (je to les) a poznámka může mít víc map,
+* první uzel je vždy kořen, i když je celý blok v souboru odsazený.
+
+### Stabilní ID uzlu
+
+Uzel může mít stabilní ID, stejným zápisem jako nadpis sekce:
+
+```text
+- [[Docker]] ^docker
+```
+
+ID stojí na konci řádku, začíná `^` a tvoří ho alfanumerické znaky, `_` a `-`.
+Odkazují se na něj ruční spoje a váže se k němu uložená pozice bubliny, takže
+uzel snese přepsání textu i přesun v osnově.
+
+Aplikace ID doplní sama, jakmile je potřeba — když uzel spojíš s jiným nebo
+bublinu odtáhneš myší. Vyrobí ho z textu uzlu (`[[Docker]]` → `docker`), takže
+zůstane čitelné; diakritika se skládá jako při hledání (`Žluťoučký` →
+`zlutoucky`).
+
+### Ruční spoje
+
+Čáry, které nevyplývají ze zanoření, jsou v samostatném bloku hned za seznamem
+uzlů:
+
+```text
+@spoje
+- docker -- db
+- db -- server
+```
+
+* blok otevírá řádek `@spoje` (`@edges` je synonymum) a patří k mapě nad sebou,
+* položka je `ID -- ID`; spojit se dá kterákoli buňka s kteroukoli jinou
+  a buněk se může spojovat víc mezi sebou,
+* spoj je neorientovaný — `docker -- db` a `db -- docker` je totéž,
+* spoj na ID, které v mapě není, zůstane v souboru, jen se nikam nekreslí.
+
+### Barva buňky
+
+Barva se píše stejným zápisem, jakým si barvu nese celá poznámka:
+
+```text
+- [[Docker]] @color:blue ^docker
+```
+
+Atribut stojí na konci řádku (před případným `^id`). Ukládá se **název** barvy
+z palety, ne odstín — ten dosazuje motiv, aby buňka zůstala čitelná ve světlém
+i tmavém. Hodnotu mimo paletu aplikace ignoruje, takže `@color:` jde přepsat na
+cokoli, aniž by se něco rozbilo.
+
+### Pozice bublin
+
+Bubliny se v aplikaci dají tahat myší. Souřadnice ale nejsou obsah poznámky, jen
+vzhled, takže do textu nepatří — ukládají se do `.txtnote/mindmap.txt`:
+
+```text
+Server.txt | docker = 240,80
+```
+
+Když se `.txtnote/` smaže, mapa se prostě srovná podle odsazení. Struktura
+mapy, spoje ani barvy se tím neztratí — ty jsou v poznámce.
+
+Buňka bez uložené pozice se srovnává automaticky a **posouvá se s odtaženým
+rodičem**, aby po přetažení nezůstal podstrom rozházený.
+
+### Mapa jako část poznámky
+
+Odkaz na mapu se dělá běžnou sekcí:
+
+```text
+== Architektura ==
+
+@mapa
+- [[Docker]]
+```
+
+Celá mapa zůstává čitelná ve `vim`u a dá se najít:
+
+```sh
+grep -rn '^@mapa' Notes/
+```
+
+---
+
 ## Konflikty názvů
 
 Je možné, že existují:
@@ -830,6 +941,21 @@ V configu je a == b a nic víc.
 
 Počet `=` určuje úroveň zanoření (`==` je úroveň 1). Text nadpisu nesmí
 obsahovat `=`.
+
+### Mapa
+
+Řádek `@mapa` musí mít za klíčovým slovem konec řádku nebo mezeru a název —
+`@mapaSveta` ani `@mapa: cokoli` mapu neotevírají. Odsazení hlavičky je
+povolené.
+
+Zanoření uzlů čte parser zásobníkem, takže mezery v úrovních nevadí: uzel
+odsazený o šest mezer pod uzlem odsazeným o dvě je jeho potomek, ne vnuk.
+Stejný zásobník používá i zápis, takže úprava mapy v aplikaci nemůže vyrobit
+blok, který by se přečetl jinak, než jak byl poslán.
+
+`^id` a `@color:` se odebírají jen z **konce** řádku uzlu, v pořadí barva
+a potom ID. Uprostřed textu jde o obyčejná slova, takže `2^10 je 1024` ani
+`@color:blue je zápis barvy` nic nenastavují a text uzlu zůstane celý.
 
 ### Tag
 

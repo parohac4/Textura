@@ -26,6 +26,10 @@ pub const TRASH_DIR: &str = "trash";
 pub const COLORS_FILE: &str = "colors.txt";
 /// Property, ve které si poznámka nese svoji barvu.
 pub const COLOR_PROPERTY: &str = "color";
+/// Rozvržení mind map: kam si uživatel odtáhl které bubliny. Je to jen
+/// vzhled, ne obsah — struktura mapy i spoje zůstávají v poznámce, takže po
+/// smazání `.txtnote/` se bubliny jen srovnají automaticky.
+pub const LAYOUT_FILE: &str = "mindmap.txt";
 
 /// Povolené barvy. Ukládá se název, ne konkrétní odstín — ten si dosadí UI
 /// podle motivu, takže poznámka zůstane čitelná i po přepnutí na tmavý.
@@ -155,6 +159,9 @@ pub struct Workspace {
     folders: BTreeSet<String>,
     /// Barvy složek načtené z `.txtnote/colors.txt`.
     folder_colors: std::collections::BTreeMap<String, String>,
+    /// Pozice bublin mind map z `.txtnote/mindmap.txt`: poznámka → ID uzlu →
+    /// souřadnice.
+    layout: std::collections::BTreeMap<String, std::collections::BTreeMap<String, (i32, i32)>>,
     by_path: HashMap<String, usize>,
     by_name: HashMap<String, Vec<usize>>,
     by_alias: HashMap<String, Vec<usize>>,
@@ -191,6 +198,7 @@ impl Workspace {
             ..Default::default()
         };
         ws.folder_colors = ws.load_folder_colors();
+        ws.layout = ws.load_layout();
 
         for rel in paths {
             let abs = ws.root.join(&rel);
@@ -778,6 +786,118 @@ impl Workspace {
         self.write(rel_path, &updated)
     }
 
+    // --- rozvržení mind map ------------------------------------------------
+
+    fn layout_path(&self) -> PathBuf {
+        self.root.join(DATA_DIR).join(LAYOUT_FILE)
+    }
+
+    /// Načte pozice bublin. Poškozený nebo chybějící soubor není chyba —
+    /// bubliny se prostě srovnají podle odsazení.
+    fn load_layout(
+        &self,
+    ) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, (i32, i32)>> {
+        let mut out: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeMap<String, (i32, i32)>,
+        > = std::collections::BTreeMap::new();
+        let Ok(text) = fs::read_to_string(self.layout_path()) else {
+            return out;
+        };
+
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let Some((path, id)) = key.split_once('|') else {
+                continue;
+            };
+            let Some((x, y)) = value.split_once(',') else {
+                continue;
+            };
+            let (Ok(x), Ok(y)) = (x.trim().parse::<i32>(), y.trim().parse::<i32>()) else {
+                continue;
+            };
+            let (path, id) = (path.trim(), id.trim());
+            if path.is_empty() || id.is_empty() {
+                continue;
+            }
+            out.entry(path.to_string())
+                .or_default()
+                .insert(id.to_string(), (x, y));
+        }
+        out
+    }
+
+    fn save_layout(&self) -> io::Result<()> {
+        let path = self.layout_path();
+        if self.layout.values().all(|nodes| nodes.is_empty()) {
+            if path.exists() {
+                fs::remove_file(&path)?;
+            }
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut text = String::from(
+            "# Rozvržení mind map pro aplikaci Textura.\n\
+             # Řádky ve tvaru: poznámka | ID uzlu = x,y\n\
+             # Je to jen vzhled. Struktura mapy i spoje jsou v samotné poznámce,\n\
+             # takže po smazání tohoto souboru se bubliny jen srovnají samy.\n\n",
+        );
+        for (note, nodes) in &self.layout {
+            for (id, (x, y)) in nodes {
+                text.push_str(&format!("{note} | {id} = {x},{y}\n"));
+            }
+        }
+        fs::write(path, text)
+    }
+
+    /// Pozice bublin dané poznámky: ID uzlu → souřadnice.
+    pub fn node_positions(&self, rel_path: &str) -> Vec<(&str, (i32, i32))> {
+        self.layout
+            .get(rel_path)
+            .map(|nodes| nodes.iter().map(|(id, pos)| (id.as_str(), *pos)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Uloží pozici bubliny; `None` ji zruší a uzel se srovná automaticky.
+    pub fn set_node_position(
+        &mut self,
+        rel_path: &str,
+        id: &str,
+        position: Option<(i32, i32)>,
+    ) -> io::Result<()> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "uzel bez ID nemá kam pozici uložit",
+            ));
+        }
+        let nodes = self.layout.entry(rel_path.to_string()).or_default();
+        match position {
+            Some(pos) => nodes.insert(id.to_string(), pos),
+            None => nodes.remove(id),
+        };
+        if nodes.is_empty() {
+            self.layout.remove(rel_path);
+        }
+        self.save_layout()
+    }
+
+    /// Zapomene pozice všech bublin poznámky — mapa se srovná automaticky.
+    pub fn clear_node_positions(&mut self, rel_path: &str) -> io::Result<()> {
+        self.layout.remove(rel_path);
+        self.save_layout()
+    }
+
     // --- mazání ------------------------------------------------------------
 
     /// Poznámky ve složce a všech jejích podsložkách.
@@ -829,6 +949,11 @@ impl Workspace {
         if let Some(i) = self.index_of_path(rel_path) {
             self.notes.remove(i);
             self.rebuild_lookups();
+        }
+
+        // Rozvržení smazané poznámky by v souboru zůstalo napořád.
+        if self.layout.remove(rel_path).is_some() {
+            self.save_layout()?;
         }
 
         Ok(relative_to(&self.root, &dest))
@@ -913,6 +1038,13 @@ impl Workspace {
         }
         fs::rename(&from_abs, &to_abs)?;
 
+        // Rozvržení mapy patří poznámce, ne cestě — po přesunu i přejmenování
+        // zůstávají bubliny tam, kam si je uživatel odtáhl.
+        if let Some(nodes) = self.layout.remove(from) {
+            self.layout.insert(to.to_string(), nodes);
+            self.save_layout()?;
+        }
+
         let mapping = vec![(strip_ext(from).to_string(), strip_ext(to).to_string())];
         let mut report = self.rewrite_explicit_links(&mapping)?;
         report.bare_links = bare_links;
@@ -976,6 +1108,24 @@ impl Workspace {
             fs::create_dir_all(parent)?;
         }
         fs::rename(&from_abs, &to_abs)?;
+
+        // Rozvržení map v přesunutých poznámkách se posouvá s nimi.
+        let note_prefix = format!("{source}/");
+        if self.layout.keys().any(|p| p.starts_with(&note_prefix)) {
+            self.layout = self
+                .layout
+                .iter()
+                .map(|(path, nodes)| {
+                    let moved = if path.starts_with(&note_prefix) {
+                        format!("{target}{}", &path[source.len()..])
+                    } else {
+                        path.clone()
+                    };
+                    (moved, nodes.clone())
+                })
+                .collect();
+            self.save_layout()?;
+        }
 
         // Barva patří složce, ne cestě — po přesunu i přejmenování zůstává.
         let prefix = format!("{source}/");

@@ -98,12 +98,67 @@ pub struct PropertyMarker {
     pub value: String,
 }
 
+/// Uzel mind mapy. `link` je index do [`Analysis::links`], pokud uzel obsahuje
+/// wiki odkaz — mapa žádné vlastní odkazy neparsuje, jen ukazuje na ty běžné.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MindNodeMarker {
+    pub from: u32,
+    pub to: u32,
+    pub text_from: u32,
+    pub text_to: u32,
+    pub depth: usize,
+    pub parent: Option<usize>,
+    /// Text uzlu, jak je v souboru — včetně `[[odkazů]]`.
+    pub text: String,
+    /// Text k vykreslení: odkazy nahrazené tím, co má uživatel vidět.
+    pub label: String,
+    /// Stabilní ID `^id`, pokud ho uzel má. Bez ID nelze uzel ručně spojit
+    /// ani mu uložit pozici — UI si ho v takovém případě nechá vyrobit.
+    pub id: Option<String>,
+    /// Barva buňky z `@color:`; hodnotu mimo paletu UI ignoruje.
+    pub color: Option<String>,
+    pub link: Option<usize>,
+    /// Uložená pozice bubliny z `.txtnote/mindmap.txt`, jinak `null` a bublinu
+    /// si mapa srovná sama.
+    pub x: Option<i32>,
+    pub y: Option<i32>,
+}
+
+/// Ruční spoj mezi dvěma buňkami — čára, která nevyplývá ze zanoření.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MindEdgeMarker {
+    pub from: String,
+    pub to: String,
+    /// Indexy uzlů, pokud se ID podařilo dohledat; jinak spoj nikam nemíří.
+    pub from_node: Option<usize>,
+    pub to_node: Option<usize>,
+    pub line: usize,
+}
+
+/// Blok `@mapa` s odsazeným seznamem uzlů.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MindMapMarker {
+    /// Celý blok — UI ho při úpravě mapy vymění za nový text.
+    pub from: u32,
+    pub to: u32,
+    pub header_from: u32,
+    pub header_to: u32,
+    pub title: Option<String>,
+    pub line: usize,
+    pub nodes: Vec<MindNodeMarker>,
+    pub edges: Vec<MindEdgeMarker>,
+}
+
 /// Kompletní rozbor poznámky pro zvýrazňování v editoru.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Analysis {
     pub properties: Vec<PropertyMarker>,
     pub sections: Vec<Marker>,
+    pub mindmaps: Vec<MindMapMarker>,
     pub links: Vec<LinkMarker>,
     pub tags: Vec<Marker>,
     pub tasks: Vec<TaskMarker>,
@@ -113,8 +168,27 @@ pub struct Analysis {
 
 impl Analysis {
     /// `from` je poznámka, ve které text stojí — určuje, jak se přeloží odkazy.
+    /// `positions` jsou uložené pozice bublin mind map dané poznámky.
     pub fn build(note: &Note, content: &str, ws: Option<&Workspace>, from: Option<usize>) -> Self {
+        Self::build_with_layout(note, content, ws, from, &[])
+    }
+
+    pub fn build_with_layout(
+        note: &Note,
+        content: &str,
+        ws: Option<&Workspace>,
+        from: Option<usize>,
+        positions: &[(&str, (i32, i32))],
+    ) -> Self {
         let map = Utf16Map::new(content);
+        let position_of = |id: Option<&String>| {
+            id.and_then(|id| {
+                positions
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(id))
+                    .map(|(_, pos)| *pos)
+            })
+        };
 
         let links = note
             .links
@@ -143,6 +217,55 @@ impl Analysis {
             })
             .collect();
 
+        let mindmaps = note
+            .mindmaps
+            .iter()
+            .map(|mm| MindMapMarker {
+                from: map.at(mm.span.start),
+                to: map.at(mm.span.end),
+                header_from: map.at(mm.header_span.start),
+                header_to: map.at(mm.header_span.end),
+                title: mm.title.clone(),
+                line: mm.line,
+                nodes: mm
+                    .nodes
+                    .iter()
+                    .map(|node| MindNodeMarker {
+                        from: map.at(node.span.start),
+                        to: map.at(node.span.end),
+                        text_from: map.at(node.text_span.start),
+                        text_to: map.at(node.text_span.end),
+                        depth: node.depth,
+                        parent: node.parent,
+                        label: node_label(note, node),
+                        text: node.text.clone(),
+                        id: node.id.clone(),
+                        color: node.color.clone(),
+                        x: position_of(node.id.as_ref()).map(|(x, _)| x),
+                        y: position_of(node.id.as_ref()).map(|(_, y)| y),
+                        // Odkaz uzlu je obyčejný odkaz poznámky — jen se na něj
+                        // ukáže indexem, aby stav (existuje / nejednoznačný)
+                        // nebyl v analýze dvakrát.
+                        link: note
+                            .links
+                            .iter()
+                            .position(|l| l.span.inside(&node.text_span)),
+                    })
+                    .collect(),
+                edges: mm
+                    .edges
+                    .iter()
+                    .map(|edge| MindEdgeMarker {
+                        from: edge.from.clone(),
+                        to: edge.to.clone(),
+                        from_node: edge.from_node,
+                        to_node: edge.to_node,
+                        line: edge.line,
+                    })
+                    .collect(),
+            })
+            .collect();
+
         Self {
             properties: note
                 .properties
@@ -164,6 +287,7 @@ impl Analysis {
                 })
                 .collect(),
             links,
+            mindmaps,
             tags: note
                 .tags
                 .iter()
@@ -277,6 +401,21 @@ impl FollowResult {
     }
 }
 
+/// Text uzlu mapy k vykreslení: `[[Docker|kontejnery]]` se ukáže jako
+/// `kontejnery`. Mapa kreslí uzly sama, takže hranaté závorky by v ní byly
+/// jen šum — v souboru ovšem zůstávají.
+fn node_label(note: &Note, node: &textura_core::MindNode) -> String {
+    let mut out = String::new();
+    let mut cursor = node.text_span.start;
+    for link in note.links.iter().filter(|l| l.span.inside(&node.text_span)) {
+        out.push_str(&node.text[cursor - node.text_span.start..link.span.start - node.text_span.start]);
+        out.push_str(&link.display_text());
+        cursor = link.span.end;
+    }
+    out.push_str(&node.text[cursor - node.text_span.start..]);
+    out
+}
+
 /// Řádek sekce, na kterou odkaz míří.
 fn section_line(ws: &Workspace, note: usize, anchor: &Anchor) -> Option<usize> {
     let parsed = ws.parsed(note)?;
@@ -377,10 +516,60 @@ impl MoveOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::SearchResult;
+    use super::{Analysis, SearchResult};
     use crate::offsets::Utf16Map;
     use textura_core::workspace::HitKind;
-    use textura_core::{SearchHit, Span};
+    use textura_core::{parse, SearchHit, Span};
+
+    #[test]
+    fn uzel_mapy_se_kresli_bez_hranatych_zavorek() {
+        let content = "@mapa Síť\n- [[Docker|kontejnery]] a k tomu [[MariaDB]]\n";
+        let note = parse(content);
+
+        let analysis = Analysis::build(&note, content, None, None);
+        let map = &analysis.mindmaps[0];
+        let node = &map.nodes[0];
+
+        assert_eq!(map.title.as_deref(), Some("Síť"));
+        assert_eq!(node.text, "[[Docker|kontejnery]] a k tomu [[MariaDB]]");
+        assert_eq!(node.label, "kontejnery a k tomu MariaDB");
+        // Odkaz uzlu je odkaz poznámky, jen se na něj ukazuje indexem.
+        assert_eq!(node.link, Some(0));
+        assert_eq!(analysis.links[node.link.unwrap()].target, "Docker");
+    }
+
+    #[test]
+    fn mapa_nese_id_spoje_i_ulozene_pozice() {
+        let content = "@mapa\n- A ^a\n- B ^b\n@spoje\n- a -- b\n";
+        let note = parse(content);
+
+        let analysis =
+            Analysis::build_with_layout(&note, content, None, None, &[("A", (120, 40))]);
+        let map = &analysis.mindmaps[0];
+
+        assert_eq!(map.nodes[0].id.as_deref(), Some("a"));
+        // Pozice se dohledává case-insensitive, ať ruční úprava souboru nevadí.
+        assert_eq!((map.nodes[0].x, map.nodes[0].y), (Some(120), Some(40)));
+        assert_eq!((map.nodes[1].x, map.nodes[1].y), (None, None));
+        assert_eq!(map.edges.len(), 1);
+        assert_eq!((map.edges[0].from_node, map.edges[0].to_node), (Some(0), Some(1)));
+    }
+
+    #[test]
+    fn rozsahy_mapy_jsou_v_utf16() {
+        let content = "Žluť\n\n@mapa\n- kůň\n";
+        let note = parse(content);
+
+        let analysis = Analysis::build(&note, content, None, None);
+        let map = &analysis.mindmaps[0];
+
+        // „Žluť\n\n“ je 6 bytů, ale 6 UTF-16 jednotek jen shodou okolností;
+        // uzel `- kůň` má diakritiku, takže se byty a jednotky rozejdou.
+        assert_eq!(map.header_from, 6);
+        assert_eq!(map.header_to, 11);
+        assert_eq!(map.nodes[0].text_from, 14);
+        assert_eq!(map.nodes[0].text_to, 17);
+    }
 
     #[test]
     fn nalez_prevede_byty_na_utf16() {

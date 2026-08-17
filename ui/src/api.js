@@ -9,6 +9,19 @@ export const listNotes = () => invoke("list_notes");
 export const readNote = (path) => invoke("read_note", { path });
 export const analyze = (path, content) => invoke("analyze", { path, content });
 export const saveNote = (path, content) => invoke("save_note", { path, content });
+/**
+ * Poskládá text bloku `@mapa` z buněk `{ depth, text, id }` a ručních spojů
+ * `{ from, to }`; formát zná jen jádro.
+ */
+export const renderMindmap = (title, nodes, edges) =>
+  invoke("render_mindmap", { title, nodes, edges });
+/** Vyrobí stabilní ID buňky, aby šla spojit a zapamatovat si pozici. */
+export const mindmapNodeId = (text, taken) => invoke("mindmap_node_id", { text, taken });
+/** Uloží pozici odtažené bubliny; `null` ji zruší. */
+export const setMindmapPosition = (path, id, x, y) =>
+  invoke("set_mindmap_position", { path, id, x, y });
+/** Zapomene pozice všech bublin poznámky — mapa se srovná sama. */
+export const clearMindmapLayout = (path) => invoke("clear_mindmap_layout", { path });
 export const createNote = (path, title) => invoke("create_note", { path, title });
 export const listFolders = () => invoke("list_folders");
 export const createFolder = (path) => invoke("create_folder", { path });

@@ -3,7 +3,8 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl, openPath } from "@tauri-apps/plugin-opener";
 
 import * as api from "./api.js";
-import { createEditor, setAnalysis, setContent, goToLine } from "./editor.js";
+import { createEditor, setAnalysis, setContent, goToLine, currentAnalysis } from "./editor.js";
+import * as mm from "./mindmap.js";
 import { loadSettings, saveSettings, applyTheme } from "./settings.js";
 
 const $ = (id) => document.getElementById(id);
@@ -16,6 +17,8 @@ const state = {
   saveTimer: null,
   analyzeTimer: null,
   searchTimer: null,
+  /** Číslo poslední vyžádané analýzy — starší odpovědi se zahazují. */
+  analyzeTicket: 0,
   settings: loadSettings(),
   /** Co je zrovna vlevo: strom složek, plochý seznam nebo výsledky hledání. */
   view: { mode: "tree" },
@@ -64,6 +67,8 @@ const view = createEditor($("editor"), {
     if (marker.type === "link") followLink(marker.link);
     else if (marker.type === "url") openUrl(marker.url.text).catch(showError);
     else if (marker.type === "task") toggleTask(marker.task);
+    // Ctrl+klik na řádek `@mapa` otevře právě tu mapu.
+    else if (marker.type === "mindmap") enterMindmap(marker.index);
   },
 });
 
@@ -72,11 +77,27 @@ function schedule(key, delay, fn) {
   state[key] = setTimeout(fn, delay);
 }
 
+/**
+ * Nechá backend rozebrat text a výsledek vykreslí. Vrací rozbor, nebo `null`,
+ * když ho mezitím předběhl novější.
+ *
+ * Rozbory se číslují, protože každý nese byte offsety ke konkrétní verzi textu.
+ * Kdyby starší odpověď dorazila po novější, editor by dostal offsety k textu,
+ * který už v něm není — a úprava mapy, která se podle nich přepisuje, by
+ * změnila špatný úsek poznámky.
+ */
+async function requestAnalysis(content) {
+  if (!state.current) return null;
+  const ticket = (state.analyzeTicket += 1);
+  const analysis = await api.analyze(state.current.path, content);
+  if (ticket !== state.analyzeTicket) return null;
+  view.dispatch({ effects: setAnalysis.of(analysis) });
+  return analysis;
+}
+
 async function refreshAnalysis(content) {
-  if (!state.current) return;
   try {
-    const analysis = await api.analyze(state.current.path, content);
-    view.dispatch({ effects: setAnalysis.of(analysis) });
+    await requestAnalysis(content);
   } catch (err) {
     showError(err);
   }
@@ -331,6 +352,7 @@ function renderTreeNode(parent, node, depth) {
 /** `match` je UTF-16 rozsah nálezu, který se má v editoru označit. */
 async function openNote(path, line = null, match = null) {
   await flushPending();
+  if (mapState.open) closeMindmap();
   try {
     const note = await api.readNote(path);
     state.current = { path: note.path, title: note.title };
@@ -1425,6 +1447,713 @@ function showCreate(suggestedPath, title) {
     body.append(info, path, confirm);
   });
 }
+// --- mind mapy -------------------------------------------------------------
+//
+// Mapa není zvláštní dokument: je to blok `@mapa` s odsazeným seznamem přímo
+// v poznámce. Kreslí se z analýzy a každá úprava se vrací do textu editoru,
+// takže se ukládá, vrací Ctrl+Z a je vidět i ve `vim`u.
+//
+// Do textu patří struktura mapy, stabilní ID buněk (`^id`) i ruční spoje
+// (`@spoje`). Pozice odtažených bublin jsou jen vzhled, takže bydlí
+// v `.txtnote/mindmap.txt` — po jeho smazání se mapa srovná sama.
+
+const mapState = {
+  open: false,
+  opening: false,
+  index: 0,
+  selected: 0,
+  /** Vybraný ruční spoj (index do `map.edges`), nebo `null`. */
+  selectedEdge: null,
+  /** Buňka, od které se právě vede nový spoj. */
+  connectFrom: null,
+  zoom: 1,
+  /** Rozdělané tažení bubliny. */
+  drag: null,
+};
+
+const currentMaps = () => currentAnalysis(view)?.mindmaps ?? [];
+const currentMap = () => currentMaps()[mapState.index] ?? null;
+
+/** Rozbor hned, bez čekání na debounce — mapa musí odpovídat textu. */
+async function analysisNow() {
+  clearTimeout(state.analyzeTimer);
+  return requestAnalysis(view.state.doc.toString());
+}
+
+async function toggleMindmap() {
+  if (mapState.open) {
+    closeMindmap();
+    return;
+  }
+  if (!state.current) {
+    showError("nejdřív otevři poznámku");
+    return;
+  }
+  // Otevření čeká na rozbor, takže druhé stisknutí Ctrl+M mezitím vidí mapu
+  // pořád zavřenou a otevřelo by ji podruhé — nebo hůř, hned zavřelo.
+  if (mapState.opening) return;
+  mapState.opening = true;
+
+  try {
+    await analysisNow();
+    const maps = currentMaps();
+    if (!maps.length) {
+      showNewMindmap();
+      return;
+    }
+
+    // Když kurzor stojí v mapě, otevře se ta; jinak první v poznámce.
+    const pos = view.state.selection.main.head;
+    const at = maps.findIndex((map) => pos >= map.from && pos <= map.to);
+    enterMindmap(at < 0 ? 0 : at);
+  } finally {
+    mapState.opening = false;
+  }
+}
+
+function closeMindmap() {
+  mapState.open = false;
+  mapState.connectFrom = null;
+  mapState.selectedEdge = null;
+  mapState.drag = null;
+  $("map-pane").hidden = true;
+  $("editor").hidden = false;
+  view.focus();
+}
+
+/** Vybere buňku; mapa se nepřekresluje, jen se přebarví rámeček. */
+function selectNode(index) {
+  mapState.selected = index;
+  mapState.selectedEdge = null;
+  mm.markSelected($("map-canvas"), index);
+}
+
+/** Přepne poznámku do mapy (podle indexu v poznámce) a vezme editoru fokus. */
+function enterMindmap(index) {
+  mapState.index = index;
+  mapState.selected = 0;
+  mapState.selectedEdge = null;
+  mapState.connectFrom = null;
+  mapState.open = true;
+  renderMindmap();
+  // Editor je schovaný, ale dokud má fokus, chodí mu klávesy.
+  view.contentDOM.blur();
+  $("map-canvas").focus();
+}
+
+function renderMindmap() {
+  const maps = currentMaps();
+  const map = maps[mapState.index];
+  if (!map) {
+    // Mapa z poznámky zmizela (třeba nedopatřením v textu) — není co kreslit.
+    closeMindmap();
+    return;
+  }
+
+  $("map-pane").hidden = false;
+  $("editor").hidden = true;
+  $("map-title").textContent = map.title || "mapa bez názvu";
+
+  const pick = $("map-pick");
+  pick.replaceChildren();
+  pick.hidden = maps.length < 2;
+  maps.forEach((m, index) => {
+    pick.append(new Option(m.title || `mapa na řádku ${m.line}`, String(index)));
+  });
+  pick.value = String(mapState.index);
+
+  mapState.selected = Math.max(0, Math.min(mapState.selected, map.nodes.length - 1));
+  mm.draw($("map-canvas"), map, currentAnalysis(view).links, {
+    selected: mapState.selected,
+    selectedEdge: mapState.selectedEdge,
+    connectFrom: mapState.connectFrom,
+    zoom: mapState.zoom,
+    handlers: {
+      onNodeDown: (index, event) => beginNodeDrag(index, event),
+      onEdit: (index) => showNodeDialog(index),
+      onMenu: (index, event) => showNodeMenu(index, event),
+      onSelectEdge: (index) => {
+        mapState.selectedEdge = index;
+        renderMindmap();
+      },
+      onBackgroundDown: () => {
+        if (mapState.connectFrom == null && mapState.selectedEdge == null) return;
+        mapState.connectFrom = null;
+        mapState.selectedEdge = null;
+        renderMindmap();
+      },
+      onOpenLink: async (index, link) => {
+        selectNode(index);
+        closeMindmap();
+        await followLink(link);
+      },
+    },
+  });
+  setMapHint();
+}
+
+/** Základní nápověda pod mapou, jak stojí v HTML. */
+const MAP_HINT = $("map-hint").innerHTML;
+
+/** Nápověda pod mapou; v režimu spojování říká, co se čeká. */
+function setMapHint() {
+  const hint = $("map-hint");
+  if (mapState.connectFrom != null) {
+    hint.textContent = "Klikni na buňku, se kterou se má tahle spojit. Esc spojování zruší.";
+    hint.classList.add("active");
+    return;
+  }
+  hint.classList.remove("active");
+  hint.innerHTML = MAP_HINT;
+}
+
+/**
+ * Zapíše upravené buňky a spoje zpátky do poznámky.
+ *
+ * `change` je výsledek úpravy z `mindmap.js`; `title` se předává jen když se
+ * mění název mapy. Vrací mapu po úpravě, aby na ni šlo navázat další krok.
+ */
+async function applyMap(change, { title } = {}) {
+  if (!change) return null;
+
+  try {
+    // Blok se přepisuje podle offsetů z rozboru, takže musí být čerstvý —
+    // v mapě do textu nikdo jiný nepíše, editor je schovaný.
+    const analysis = await analysisNow();
+    const map = analysis?.mindmaps[mapState.index];
+    if (!map) return null;
+
+    const edges = change.edges ?? mm.toEdges(map);
+    const text = await api.renderMindmap(
+      title === undefined ? map.title : title,
+      change.list,
+      edges,
+    );
+    view.dispatch({ changes: { from: map.from, to: map.to, insert: text } });
+    await analysisNow();
+
+    // Pozice buněk, které zmizely, nemá smysl držet v `.txtnote/`.
+    for (const id of change.removedIds ?? []) {
+      await api.setMindmapPosition(state.current.path, id, null, null).catch(() => {});
+    }
+
+    if (change.select != null) mapState.selected = change.select;
+    mapState.selectedEdge = null;
+    renderMindmap();
+    return currentMap();
+  } catch (err) {
+    showError(err);
+    return null;
+  }
+}
+
+/** Nová buňka: `shift` 1 udělá potomka vybrané buňky, 0 sourozence. */
+async function addNode(shift) {
+  const map = currentMap();
+  if (!map) return;
+  await applyMap(mm.insertNode(mm.toList(map), mapState.selected, shift, "Nová buňka"));
+  showNodeDialog(mapState.selected);
+}
+
+async function editMap(edit) {
+  const map = currentMap();
+  if (!map || !map.nodes.length) return;
+  await applyMap(edit(mm.toList(map), mapState.selected));
+}
+
+function deleteNode(index = mapState.selected) {
+  const map = currentMap();
+  if (!map || !map.nodes.length) return;
+  const list = mm.toList(map);
+  const edges = mm.toEdges(map);
+  const count = mm.subtreeLength(list, index);
+
+  if (count === 1) {
+    applyMap(mm.removeNode(list, edges, index));
+    return;
+  }
+  showModal("Smazat buňku", (body) => {
+    const info = document.createElement("p");
+    info.textContent = `Buňka „${map.nodes[index].label}“ má potomky — smaže se i ${count - 1} podřízených buněk.`;
+    const confirm = document.createElement("button");
+    confirm.className = "primary danger";
+    confirm.textContent = "Smazat";
+    confirm.onclick = () => {
+      closeModal();
+      applyMap(mm.removeNode(list, edges, index));
+    };
+    body.append(info, confirm);
+  });
+}
+
+/** Smaže vybraný ruční spoj. Zanoření se takhle zrušit nedá — to je struktura. */
+function deleteEdge() {
+  const map = currentMap();
+  if (!map || mapState.selectedEdge == null) return;
+  applyMap({
+    list: mm.toList(map),
+    edges: mm.removeEdge(mm.toEdges(map), mapState.selectedEdge),
+    select: mapState.selected,
+  });
+}
+
+// --- tažení bublin ---------------------------------------------------------
+
+/**
+ * Začne tažení bubliny. Dokud se myš nepohne, je to obyčejný klik (výběr),
+ * takže se pozice ukládá teprve při skutečném přetažení.
+ */
+function beginNodeDrag(index, event) {
+  const map = currentMap();
+  if (!map) return;
+
+  // V režimu spojování klik na buňku spoj dokončí.
+  if (mapState.connectFrom != null) {
+    connectTo(index);
+    return;
+  }
+
+  selectNode(index);
+
+  const node = mm.layout(map).nodes[index];
+  mapState.drag = {
+    index,
+    startX: event.clientX,
+    startY: event.clientY,
+    origin: { x: node.x, y: node.y },
+    scale: mm.scaleOf($("map-canvas")),
+    moved: false,
+    position: null,
+  };
+}
+
+function onMapMouseMove(event) {
+  const drag = mapState.drag;
+  if (!drag) return;
+  const dx = (event.clientX - drag.startX) / drag.scale;
+  const dy = (event.clientY - drag.startY) / drag.scale;
+  if (!drag.moved && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+  drag.moved = true;
+  drag.position = mm.moveNodeVisual($("map-canvas"), drag.index, dx, dy, drag.origin);
+}
+
+async function onMapMouseUp() {
+  const drag = mapState.drag;
+  mapState.drag = null;
+  if (!drag) return;
+
+  const node = currentMap()?.nodes[drag.index];
+  if (!node) return;
+
+  // Klik bez tažení na buňku s odkazem otevře poznámku. Buňku samotnou pak jde
+  // vybrat pravým klikem nebo šipkami, upravit z menu či F2.
+  if (!drag.moved) {
+    const link = node.link == null ? null : currentAnalysis(view).links[node.link];
+    if (link) {
+      closeMindmap();
+      await followLink(link);
+    }
+    return;
+  }
+  if (!drag.position) return;
+
+  try {
+    // Pozice se ukládá pod stabilním ID, takže ho buňka musí mít. Vyrobí se
+    // z jejího textu, aby zůstala čitelná i v souboru.
+    const id = node.id ?? (await ensureNodeId(drag.index));
+    if (!id) return;
+    await api.setMindmapPosition(state.current.path, id, drag.position.x, drag.position.y);
+    await analysisNow();
+    renderMindmap();
+  } catch (err) {
+    showError(err);
+  }
+}
+
+/** Dá buňce stabilní ID (a zapíše ho do poznámky). Vrací ID, nebo `null`. */
+async function ensureNodeId(index) {
+  const map = currentMap();
+  const node = map?.nodes[index];
+  if (!node) return null;
+  if (node.id) return node.id;
+
+  const list = mm.toList(map);
+  const id = await api.mindmapNodeId(node.label || node.text, mm.takenIds(list));
+  const updated = await applyMap({ ...mm.setId(list, index, id), select: index });
+  return updated?.nodes[index]?.id ?? null;
+}
+
+/** Zruší uloženou pozici buňky — srovná se zpátky podle zanoření. */
+async function releaseNode(index = mapState.selected) {
+  const node = currentMap()?.nodes[index];
+  if (!node?.id) return;
+  try {
+    await api.setMindmapPosition(state.current.path, node.id, null, null);
+    await analysisNow();
+    renderMindmap();
+  } catch (err) {
+    showError(err);
+  }
+}
+
+/** Srovná celou mapu — zapomene pozice všech bublin v poznámce. */
+async function tidyMindmap() {
+  if (!state.current) return;
+  try {
+    await api.clearMindmapLayout(state.current.path);
+    await analysisNow();
+    renderMindmap();
+  } catch (err) {
+    showError(err);
+  }
+}
+
+// --- ruční spoje -----------------------------------------------------------
+
+/** Začne spojování od vybrané buňky. */
+function startConnect(index = mapState.selected) {
+  if (!currentMap()?.nodes[index]) return;
+  mapState.connectFrom = index;
+  mapState.selectedEdge = null;
+  renderMindmap();
+}
+
+/** Dokončí spoj kliknutím na druhou buňku. */
+async function connectTo(index) {
+  const map = currentMap();
+  const from = mapState.connectFrom;
+  mapState.connectFrom = null;
+  if (!map || from == null || from === index) {
+    renderMindmap();
+    return;
+  }
+
+  try {
+    // Spoj se v textu odkazuje na ID, takže je obě buňky musí mít.
+    const fromId = await ensureNodeId(from);
+    const toId = await ensureNodeId(index);
+    if (!fromId || !toId) return;
+
+    const fresh = currentMap();
+    const edges = mm.addEdge(mm.toEdges(fresh), fromId, toId);
+    if (!edges) {
+      // Spoj už existuje; ať je vidět, že se neztratil klik.
+      $("status").textContent = "Tyhle buňky už spojené jsou.";
+      renderMindmap();
+      return;
+    }
+    await applyMap({ list: mm.toList(fresh), edges, select: index });
+  } catch (err) {
+    showError(err);
+  }
+}
+
+/** Zruší všechny ruční spoje vedoucí do dané buňky. */
+function disconnectNode(index) {
+  const map = currentMap();
+  if (!map) return;
+  const edges = mm
+    .toEdges(map)
+    .filter((_, i) => map.edges[i].fromNode !== index && map.edges[i].toNode !== index);
+  applyMap({ list: mm.toList(map), edges, select: index });
+}
+
+// --- dialogy ---------------------------------------------------------------
+
+/** Dialog buňky: vlastní popis, odkaz na poznámku, nebo obojí. */
+function showNodeDialog(index) {
+  const map = currentMap();
+  const node = map?.nodes[index];
+  if (!node) return;
+
+  const links = currentAnalysis(view).links;
+  const link = node.link == null ? null : links[node.link];
+  // Buňka, která je celá jen odkazem, se rozebere na popis a cíl. Smíšený text
+  // („kůň [[Docker]] a tak“) se do popisu vloží tak, jak je v souboru —
+  // dialog nesmí být cesta, jak si uživatel o text připíše.
+  const pureLink = Boolean(link) && node.text === `${link.embed ? "!" : ""}[[${link.raw}]]`;
+  const initialTarget = pureLink ? link.target : "";
+  const initialDesc = pureLink ? (link.display === link.target ? "" : link.display) : node.text;
+
+  const compose = (desc, target) => {
+    const text = desc.trim();
+    if (!target) return text;
+    // Popis se do odkazu vloží jako alias; případný odkaz v popisu by z toho
+    // udělal odkaz v odkazu, tak se vyhodí.
+    const label = text.replace(/!?\[\[[^\]]*\]\]/g, "").trim();
+    const name = target.split("/").pop();
+    return label && label !== name ? `[[${target}|${label}]]` : `[[${target}]]`;
+  };
+
+  showModal("Buňka mapy", (body) => {
+    const descLabel = document.createElement("label");
+    descLabel.textContent = "Popis";
+    const desc = document.createElement("input");
+    desc.type = "text";
+    desc.value = initialDesc;
+    desc.placeholder = "Text buňky";
+    descLabel.append(desc);
+
+    const targetLabel = document.createElement("label");
+    targetLabel.textContent = "Odkaz na poznámku";
+    const target = document.createElement("select");
+    target.append(new Option("(žádný)", ""));
+    for (const note of state.notes) {
+      const value = note.path.replace(/\.txt$/i, "");
+      target.append(new Option(note.folder ? `${note.title} — ${note.folder}` : note.title, value));
+    }
+    target.value = state.notes.some((n) => n.path.replace(/\.txt$/i, "") === initialTarget)
+      ? initialTarget
+      : "";
+    targetLabel.append(target);
+
+    const preview = document.createElement("code");
+    preview.className = "block";
+
+    const confirm = document.createElement("button");
+    confirm.className = "primary";
+    confirm.textContent = "Uložit";
+
+    const update = () => {
+      const text = compose(desc.value, target.value);
+      preview.textContent = text || "(prázdná buňka)";
+      confirm.disabled = !text;
+    };
+    confirm.onclick = () => {
+      const text = compose(desc.value, target.value);
+      closeModal();
+      applyMap(mm.setText(mm.toList(map), index, text));
+    };
+    desc.oninput = update;
+    target.onchange = update;
+    desc.onkeydown = (event) => {
+      if (event.key === "Enter" && !confirm.disabled) confirm.click();
+    };
+
+    body.append(descLabel, targetLabel, preview, confirm);
+    update();
+    setTimeout(() => {
+      desc.focus();
+      desc.select();
+    }, 0);
+  });
+}
+
+/** Barva buňky. Ukládá se do poznámky jako `@color:` na řádku buňky. */
+function showNodeColor(index = mapState.selected) {
+  const map = currentMap();
+  const node = map?.nodes[index];
+  if (!node) return;
+
+  showColorPicker(
+    "Barva buňky",
+    "Uloží se na řádek buňky jako @color:, takže ji uvidíš i v obyčejném textovém editoru.",
+    node.color ?? null,
+    (color) => applyMap({ ...mm.setColor(mm.toList(map), index, color), select: index }),
+  );
+}
+
+/** Pravý klik na buňku. */
+function showNodeMenu(index, event) {
+  selectNode(index);
+  const map = currentMap();
+  const node = map?.nodes[index];
+  if (!node) return;
+
+  const items = [
+    ["Upravit…", () => showNodeDialog(index)],
+    ["Nový potomek", () => addNode(1)],
+    ["Nový sourozenec", () => addNode(0)],
+    ["Spojit s…", () => startConnect(index)],
+    ["Barva…", () => showNodeColor(index)],
+  ];
+  if (map.edges.some((edge) => edge.fromNode === index || edge.toNode === index)) {
+    items.push(["Zrušit ruční spoje buňky", () => disconnectNode(index)]);
+  }
+  if (node.x != null) items.push(["Srovnat buňku", () => releaseNode(index)]);
+  items.push(["Smazat…", () => deleteNode(index)]);
+
+  showContextMenu(event, node.label, items);
+}
+
+function showMapTitleDialog() {
+  const map = currentMap();
+  if (!map) return;
+
+  showModal("Název mapy", (body) => {
+    const info = document.createElement("p");
+    info.textContent = "Název stojí za @mapa na prvním řádku bloku. Může být i prázdný.";
+
+    const field = document.createElement("label");
+    field.textContent = "Název";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = map.title ?? "";
+    field.append(input);
+
+    const confirm = document.createElement("button");
+    confirm.className = "primary";
+    confirm.textContent = "Uložit";
+    confirm.onclick = () => {
+      const next = input.value.trim();
+      closeModal();
+      applyMap(
+        { list: mm.toList(map), select: mapState.selected },
+        { title: next ? next : null },
+      );
+    };
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") confirm.click();
+    };
+
+    body.append(info, field, confirm);
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 0);
+  });
+}
+
+function showNewMindmap() {
+  if (!state.current) {
+    showError("nejdřív otevři poznámku");
+    return;
+  }
+  showModal("Nová mind mapa", (body) => {
+    const info = document.createElement("p");
+    info.textContent =
+      "Mapa se vloží do poznámky jako odsazený seznam pod řádkem @mapa, takže zůstane čitelná i jako obyčejný text.";
+
+    const field = document.createElement("label");
+    field.textContent = "Název mapy";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = "Například Infrastruktura";
+    field.append(input);
+
+    const confirm = document.createElement("button");
+    confirm.className = "primary";
+    confirm.textContent = "Vložit";
+    confirm.onclick = () => {
+      const title = input.value.trim();
+      closeModal();
+      insertMindmap(title);
+    };
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") confirm.click();
+    };
+
+    body.append(info, field, confirm);
+    setTimeout(() => input.focus(), 0);
+  });
+}
+
+/** Vloží nový blok mapy na místo kurzoru a hned ji otevře. */
+async function insertMindmap(title) {
+  try {
+    const text = await api.renderMindmap(
+      title || null,
+      [{ depth: 0, text: title || "Střed", id: null }],
+      [],
+    );
+    const { doc, lineBreak } = view.state;
+    const line = doc.lineAt(view.state.selection.main.head);
+    const nextLine = line.number < doc.lines ? doc.line(line.number + 1).text : "";
+
+    // Blok musí stát na vlastních řádcích a končit prázdným, jinak by se do
+    // mapy vtáhl seznam, který v poznámce následuje. Konec původního řádku
+    // za vloženým blokem zůstává, takže stačí přidat jeden.
+    const head = line.text.trim() ? lineBreak + lineBreak : "";
+    const tail = nextLine.trim() ? lineBreak : "";
+    const at = line.text.trim() ? line.to : line.from;
+    const insert = head + text + tail;
+
+    view.dispatch({ changes: { from: at, insert }, selection: { anchor: at + head.length } });
+    await analysisNow();
+
+    const index = currentMaps().findIndex((map) => map.from >= at);
+    enterMindmap(index < 0 ? 0 : index);
+  } catch (err) {
+    showError(err);
+  }
+}
+
+/** Klávesy v otevřené mapě. Vrací `true`, když se klávesa spotřebovala. */
+function handleMapKey(event) {
+  const map = currentMap();
+  if (!map) return false;
+
+  const alt = event.altKey;
+  const stop = () => {
+    event.preventDefault();
+    return true;
+  };
+
+  switch (event.key) {
+    case "Escape":
+      // Escape ubírá po vrstvách: spojování, výběr spoje, teprve pak mapa.
+      if (mapState.connectFrom != null || mapState.selectedEdge != null) {
+        mapState.connectFrom = null;
+        mapState.selectedEdge = null;
+        renderMindmap();
+      } else {
+        closeMindmap();
+      }
+      return stop();
+    case "Tab":
+      if (event.shiftKey) return false;
+      addNode(1);
+      return stop();
+    case "Enter":
+      addNode(0);
+      return stop();
+    case "F2":
+      showNodeDialog(mapState.selected);
+      return stop();
+    case "Delete":
+      if (mapState.selectedEdge != null) deleteEdge();
+      else deleteNode();
+      return stop();
+    case "s":
+    case "S":
+      startConnect();
+      return stop();
+    case "b":
+    case "B":
+      showNodeColor();
+      return stop();
+    case "+":
+    case "=":
+      mapState.zoom = Math.min(2, mapState.zoom + 0.1);
+      renderMindmap();
+      return stop();
+    case "-":
+      mapState.zoom = Math.max(0.5, mapState.zoom - 0.1);
+      renderMindmap();
+      return stop();
+    default:
+      break;
+  }
+
+  if (!map.nodes.length) return false;
+
+  if (alt && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    editMap(event.key === "ArrowLeft" ? mm.outdentNode : mm.indentNode);
+    return stop();
+  }
+  if (alt && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+    const direction = event.key === "ArrowUp" ? -1 : 1;
+    editMap((list, index) => mm.moveNode(list, index, direction));
+    return stop();
+  }
+  if (event.key.startsWith("Arrow")) {
+    const next = mm.navigate(map, mapState.selected, event.key);
+    if (next == null) return stop();
+    selectNode(next);
+    return stop();
+  }
+  return false;
+}
 
 // --- drobnosti -------------------------------------------------------------
 
@@ -1447,6 +2176,26 @@ $("new-note").onclick = () => showNewNote();
 $("new-dated-note").onclick = () => createDatedNote();
 $("new-folder").onclick = () => showNewFolder();
 $("settings").onclick = showSettings;
+$("mindmap").onclick = toggleMindmap;
+$("map-close").onclick = closeMindmap;
+$("map-child").onclick = () => addNode(1);
+$("map-sibling").onclick = () => addNode(0);
+$("map-edit").onclick = () => showNodeDialog(mapState.selected);
+$("map-connect").onclick = () => startConnect();
+$("map-color").onclick = () => showNodeColor();
+$("map-delete").onclick = () => (mapState.selectedEdge != null ? deleteEdge() : deleteNode());
+$("map-tidy").onclick = tidyMindmap;
+$("map-rename").onclick = showMapTitleDialog;
+$("map-new").onclick = showNewMindmap;
+// Tažení bubliny se dokončuje i mimo plátno — myš z něj při rychlém pohybu
+// vyjede a jinak by bublina zůstala „přilepená“ na kurzoru.
+document.addEventListener("mousemove", onMapMouseMove);
+document.addEventListener("mouseup", onMapMouseUp);
+$("map-pick").onchange = (event) => {
+  mapState.index = Number(event.target.value);
+  mapState.selected = 0;
+  renderMindmap();
+};
 $("reload").onclick = reload;
 $("modal-cancel").onclick = closeModal;
 $("filter-clear").onclick = clearFilter;
@@ -1462,7 +2211,22 @@ document.addEventListener("contextmenu", (event) => {
   // s návrhy oprav překlepů.
   if (!event.target.closest(".row, .folder-row, #context-menu")) closeContextMenu();
 });
+// Klávesy mapy se obsluhují v capture fázi, tedy dřív než se dostanou k
+// CodeMirroru. Jinak by editor — schovaný, ale pořád živý — na Tab odsadil
+// řádek a na Enter pokračoval v seznamu, takže by mapa upravovala text, který
+// se jí pod rukama posunul.
+document.addEventListener(
+  "keydown",
+  (event) => {
+    // Dialog nad mapou má přednost, aby v něm šlo psát.
+    if (mapState.open && $("modal").hidden && handleMapKey(event)) event.stopPropagation();
+  },
+  true,
+);
+
 document.addEventListener("keydown", (event) => {
+  // Klávesy, které si vzala mapa, se sem nedostanou — capture obsluha výše
+  // zastaví jejich šíření. Zbytek (Ctrl+M, Ctrl+F, …) funguje i nad mapou.
   if (event.key === "Escape") {
     // Escape zavírá postupně: menu, dialog, filtr v seznamu.
     const inSearch = document.activeElement === $("search");
@@ -1481,6 +2245,11 @@ document.addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "n") {
     event.preventDefault();
     createDatedNote();
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "m") {
+    event.preventDefault();
+    // Držená klávesa posílá keydown opakovaně; mapa by problikávala.
+    if (!event.repeat) toggleMindmap();
   }
   if ((event.ctrlKey || event.metaKey) && event.key === "f") {
     // Bez preventDefault by webview otevřel vlastní hledání v stránce.

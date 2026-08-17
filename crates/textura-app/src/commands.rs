@@ -3,9 +3,10 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use serde::Deserialize;
 use tauri::State;
 use textura_core::workspace::{Resolution, Workspace};
-use textura_core::{parse, LineEnding};
+use textura_core::{mindmap, parse, LineEnding};
 
 use crate::dto::*;
 use crate::offsets::Utf16Map;
@@ -81,7 +82,13 @@ pub fn read_note(path: String, state: State<AppState>) -> Res<NoteContent> {
             .unwrap_or_else(|| path.clone());
 
         Ok(NoteContent {
-            analysis: Analysis::build(&note, &content, Some(ws), index),
+            analysis: Analysis::build_with_layout(
+                &note,
+                &content,
+                Some(ws),
+                index,
+                &ws.node_positions(&path),
+            ),
             path,
             title,
             content,
@@ -95,11 +102,12 @@ pub fn read_note(path: String, state: State<AppState>) -> Res<NoteContent> {
 pub fn analyze(path: String, content: String, state: State<AppState>) -> Res<Analysis> {
     with_ws(&state, |ws| {
         let note = parse(&content);
-        Ok(Analysis::build(
+        Ok(Analysis::build_with_layout(
             &note,
             &content,
             Some(ws),
             ws.index_of_path(&path),
+            &ws.node_positions(&path),
         ))
     })
 }
@@ -138,6 +146,85 @@ pub(crate) fn apply_file_style(content: &str, line_ending: LineEnding, had_bom: 
         out.insert(0, '\u{feff}');
     }
     out
+}
+
+/// Uzel mapy, jak ho posílá UI: zanoření, text řádku a případná barva a ID.
+#[derive(Debug, Deserialize)]
+pub struct MindNodeInput {
+    pub depth: usize,
+    pub text: String,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+/// Ruční spoj, jak ho posílá UI: dvojice ID uzlů.
+#[derive(Debug, Deserialize)]
+pub struct MindEdgeInput {
+    pub from: String,
+    pub to: String,
+}
+
+/// Poskládá text bloku `@mapa` z uzlů a ručních spojů. UI si mapu
+/// neserializuje samo — zápis formátu zůstává v jádře, stejně jako jeho čtení.
+///
+/// Vrací blok s LF; editor pracuje vždy s LF a konce řádků původního souboru
+/// dosadí až [`save_note`].
+#[tauri::command]
+pub fn render_mindmap(
+    title: Option<String>,
+    nodes: Vec<MindNodeInput>,
+    edges: Vec<MindEdgeInput>,
+) -> String {
+    let nodes: Vec<mindmap::NodeSpec> = nodes
+        .into_iter()
+        .map(|n| mindmap::NodeSpec {
+            depth: n.depth,
+            text: n.text,
+            color: n.color,
+            id: n.id,
+        })
+        .collect();
+    // Spoj na uzel, který v mapě není, se nikam nekreslí — ale v textu ho
+    // necháváme, mohl si ho uživatel napsat sám a mapa mu ho nemá mazat.
+    let edges: Vec<(String, String)> = edges.into_iter().map(|e| (e.from, e.to)).collect();
+    mindmap::render(title.as_deref(), &nodes, &edges, "\n")
+}
+
+/// Vyrobí stabilní ID pro uzel, aby šel spojit a zapamatovat si pozici.
+#[tauri::command]
+pub fn mindmap_node_id(text: String, taken: Vec<String>) -> String {
+    mindmap::suggest_id(&text, &taken)
+}
+
+/// Uloží pozici bubliny. `x`/`y` jako `None` pozici zruší a uzel se srovná
+/// automaticky.
+#[tauri::command]
+pub fn set_mindmap_position(
+    path: String,
+    id: String,
+    x: Option<i32>,
+    y: Option<i32>,
+    state: State<AppState>,
+) -> Res<()> {
+    with_ws_mut(&state, |ws| {
+        let position = match (x, y) {
+            (Some(x), Some(y)) => Some((x, y)),
+            _ => None,
+        };
+        ws.set_node_position(&path, &id, position)
+            .map_err(|e| format!("{path}: {e}"))
+    })
+}
+
+/// Zapomene pozice všech bublin poznámky — mapa se srovná podle odsazení.
+#[tauri::command]
+pub fn clear_mindmap_layout(path: String, state: State<AppState>) -> Res<()> {
+    with_ws_mut(&state, |ws| {
+        ws.clear_node_positions(&path)
+            .map_err(|e| format!("{path}: {e}"))
+    })
 }
 
 #[cfg(test)]

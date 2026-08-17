@@ -15,6 +15,7 @@
 
 pub mod comments;
 pub mod links;
+pub mod mindmap;
 pub mod properties;
 pub mod search;
 pub mod sections;
@@ -26,6 +27,7 @@ pub mod workspace;
 
 pub use comments::Comment;
 pub use links::{Anchor, LinkKind, WikiLink};
+pub use mindmap::{MindMap, MindNode};
 pub use properties::Property;
 pub use search::Query;
 pub use sections::Section;
@@ -41,6 +43,8 @@ pub use workspace::{Backlink, HitKind, IndexedNote, Resolution, SearchHit, Works
 pub struct Note {
     pub properties: Vec<Property>,
     pub sections: Vec<Section>,
+    /// Mind mapy — bloky `@mapa` s odsazeným seznamem uzlů.
+    pub mindmaps: Vec<MindMap>,
     pub links: Vec<WikiLink>,
     pub tags: Vec<Tag>,
     pub tasks: Vec<Task>,
@@ -155,6 +159,7 @@ pub fn parse(input: &str) -> Note {
 
     Note {
         sections: sections::parse(&body_lines, end),
+        mindmaps: mindmap::parse(&body_lines),
         tags: tags::parse(&masked, base, &tag_exclude),
         tasks: tasks::parse(&body_lines),
         properties,

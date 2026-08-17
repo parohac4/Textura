@@ -775,3 +775,190 @@ code.block.conflict {
   justify-content: flex-end;
   margin-top: 14px;
 }
+
+/* --- mind mapa ------------------------------------------------------------ */
+
+#map-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#map-pane[hidden] {
+  display: none;
+}
+
+.map-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+#map-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+#map-pick {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+#map-canvas {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg);
+}
+
+/* Plátno musí být zaostřitelné kvůli klávesám, ale rámeček kolem celé mapy
+   je jen na obtíž — co je vybrané, ukazuje bublina. */
+#map-canvas:focus {
+  outline: none;
+}
+
+.map-svg {
+  display: block;
+  /* Bez toho by delší popis uzlu při zvětšení mapy vytékal z rámečku. */
+  font-family: var(--sans);
+  font-size: 13px;
+}
+
+.map-edge {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+
+.map-box {
+  fill: var(--bg-soft);
+  stroke: var(--border);
+}
+
+.map-node {
+  cursor: grab;
+}
+
+.map-node.dragging {
+  cursor: grabbing;
+}
+
+/* Odtažená bublina je světlejší, ať je poznat, co drží pozici a co se srovnává
+   automaticky. */
+.map-node.placed .map-box {
+  fill: var(--bg-row);
+}
+
+.map-node.connecting .map-box {
+  stroke: var(--tag);
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+}
+
+.map-node:hover .map-box {
+  stroke: var(--accent);
+}
+
+.map-node.selected .map-box {
+  fill: var(--bg-row);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.map-label {
+  fill: var(--text);
+}
+
+.map-node.has-link .map-label {
+  fill: var(--link);
+}
+
+.map-node.link-unresolved .map-label,
+.map-node.link-unresolved .map-open {
+  fill: var(--link-unresolved);
+}
+
+.map-node.link-ambiguous .map-label,
+.map-node.link-ambiguous .map-open {
+  fill: var(--link-ambiguous);
+}
+
+.map-open {
+  fill: var(--link);
+  font-size: 12px;
+}
+
+/* Obarvená bublina: rámeček a text barvou, výplň jen jemně podbarvená, ať
+   text zůstane čitelný ve světlém i tmavém motivu. */
+.map-node[data-color] .map-box {
+  stroke: var(--node-color);
+  stroke-width: 1.8;
+}
+
+.map-node[data-color] .map-label {
+  fill: var(--node-color);
+}
+
+.map-node[data-color].selected .map-box {
+  stroke: var(--node-color);
+  stroke-width: 3;
+}
+
+.map-node[data-color="red"] { --node-color: var(--c-red); }
+.map-node[data-color="orange"] { --node-color: var(--c-orange); }
+.map-node[data-color="yellow"] { --node-color: var(--c-yellow); }
+.map-node[data-color="green"] { --node-color: var(--c-green); }
+.map-node[data-color="teal"] { --node-color: var(--c-teal); }
+.map-node[data-color="blue"] { --node-color: var(--c-blue); }
+.map-node[data-color="purple"] { --node-color: var(--c-purple); }
+.map-node[data-color="pink"] { --node-color: var(--c-pink); }
+
+/* Ruční spoj: čárkovaně, aby se nepletl se zanořením. */
+.map-edge-manual {
+  fill: none;
+  stroke: var(--link-ambiguous);
+  stroke-width: 1.6;
+  stroke-dasharray: 6 4;
+}
+
+/* Neviditelná tlustá čára pod spojem — na tenkou linku se klikat nedá. */
+.map-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12;
+}
+
+.map-link-edge {
+  cursor: pointer;
+}
+
+.map-link-edge:hover .map-edge-manual,
+.map-link-edge.selected .map-edge-manual {
+  stroke: var(--accent);
+  stroke-width: 2.6;
+}
+
+.map-hint {
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.map-hint.active {
+  color: var(--tag);
+}
+
+.tx-mindmap {
+  color: var(--accent);
+  font-weight: 600;
+}

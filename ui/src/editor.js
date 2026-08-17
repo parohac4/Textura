@@ -25,6 +25,10 @@ const cls = {
   taskDone: Decoration.mark({ class: "tx-task-done" }),
   taskImportant: Decoration.mark({ class: "tx-task-important" }),
   marker: Decoration.mark({ class: "tx-task-marker" }),
+  mindmap: Decoration.mark({
+    class: "tx-mindmap",
+    attributes: { title: "Mind mapa — Ctrl+klik ji otevře jako schéma" },
+  }),
 };
 
 function linkDecoration(link) {
@@ -59,6 +63,7 @@ function buildDecorations(analysis, docLength) {
   for (const t of analysis.tags) push(t.from, t.to, cls.tag);
   for (const u of analysis.urls) push(u.from, u.to, cls.url);
   for (const c of analysis.comments) push(c.from, c.to, cls.comment);
+  for (const m of analysis.mindmaps) push(m.headerFrom, m.headerTo, cls.mindmap);
   for (const l of analysis.links) push(l.from, l.to, linkDecoration(l));
   for (const t of analysis.tasks) {
     push(t.markerFrom, t.markerTo, cls.marker);
@@ -112,6 +117,9 @@ export function markerAt(view, pos) {
   }
   for (const task of analysis.tasks) {
     if (pos >= task.markerFrom && pos <= task.markerTo) return { type: "task", task };
+  }
+  for (const [index, map] of analysis.mindmaps.entries()) {
+    if (pos >= map.headerFrom && pos <= map.headerTo) return { type: "mindmap", index };
   }
   return null;
 }

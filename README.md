@@ -183,6 +183,9 @@ i tam, kde nejsou GTK/WebKit knihovny.
 * <kbd>Ctrl</kbd>+<kbd>klik</kbd> na URL otevře výchozí prohlížeč
 * klik na `[ ]` překlikne úkol
 * automatické pokračování seznamů a úkolů na Enter
+* mind mapy: blok `@mapa` s odsazeným seznamem se dá otevřít jako schéma
+  (<kbd>Ctrl</kbd>+<kbd>M</kbd> nebo tlačítko **Mapa**), tahat v něm bubliny
+  myší, obarvovat je, mazat a ručně spojovat čárami
 * panel zpětných odkazů
 * fulltext přes celý workspace — bez ohledu na diakritiku, víc slov jako AND,
   se zvýrazněným nálezem
@@ -224,12 +227,63 @@ Projekty = blue
 Servery/Produkce = green
 ```
 
-Je to jediná věc v aplikaci uložená mimo poznámky. Když se `.txtnote/` smaže,
-barvy složek se ztratí — nic jiného ne. Barva složky se s ní posouvá při
-přesunu i přejmenování a při smazání se ze souboru uklidí.
+Mimo poznámky jsou uložené jen dvě věci: barvy složek a pozice bublin
+v mind mapách (`.txtnote/mindmap.txt`). Když se `.txtnote/` smaže, ztratí se
+tyhle dvě ozdoby — nic jiného. Barva složky se s ní posouvá při přesunu
+i přejmenování a při smazání se ze souboru uklidí.
 
 Hodnotu mimo paletu aplikace ignoruje, takže si `@color` můžeš přepsat na
 cokoli, aniž by se něco rozbilo.
+
+### Mind mapy
+
+Mapa se do poznámky zapisuje jako obyčejný odsazený seznam pod řádkem `@mapa`:
+
+```text
+@mapa Infrastruktura
+- Produkční server ^server
+  - [[Docker]] @color:blue ^docker
+    - běží v něm pět služeb
+  - [[MariaDB|databáze]] ^db
+@spoje
+- docker -- db
+```
+
+Do buňky patří vlastní popis, odkaz na poznámku, nebo obojí. Odkaz v buňce je
+běžný odkaz — dohledává se stejně a počítá se do zpětných odkazů, takže mapa
+není ostrůvek mimo zbytek workspace.
+
+<kbd>Ctrl</kbd>+<kbd>M</kbd> (nebo <kbd>Ctrl</kbd>+<kbd>klik</kbd> na řádek
+`@mapa`) přepne poznámku do schématu.
+
+| Akce | Jak |
+| --- | --- |
+| přesunout bublinu | tahem myší |
+| otevřít poznámku buňky | kliknutím na buňku (nebo na ↗) |
+| nová podřízená / sousední buňka | <kbd>Tab</kbd> / <kbd>Enter</kbd> |
+| upravit buňku | <kbd>F2</kbd>, dvojklik nebo menu na pravý klik |
+| barva buňky | <kbd>B</kbd> nebo menu |
+| spojit dvě buňky čárou | <kbd>S</kbd> a pak klik na druhou buňku |
+| smazat buňku i s potomky | <kbd>Delete</kbd> |
+| smazat ruční spoj | klik na čáru a <kbd>Delete</kbd> |
+| přesun v osnově | <kbd>Alt</kbd>+šipky |
+| výběr buňky | šipky |
+| srovnat rozházené bubliny | tlačítko **Srovnat** |
+| zpět do textu | <kbd>Esc</kbd> |
+
+Ručně spojit jde **kterákoli buňka s kteroukoli jinou** a buněk se dá spojovat
+víc mezi sebou — čáry ze zanoření tím zůstávají nedotčené, ruční spoje se kreslí
+čárkovaně. Spoj se v souboru odkazuje na stabilní ID buňky, takže si aplikace ID
+doplní sama, jakmile buňku spojíš nebo její bublinu odtáhneš.
+
+Každá úprava jde zpátky do textu poznámky, takže se ukládá autosavem, vrací
+<kbd>Ctrl</kbd>+<kbd>Z</kbd> a je vidět i ve `vim`u. Poznámka může mít map víc
+a přepíná se mezi nimi rozbalovacím seznamem v liště mapy.
+
+Jediné, co v textu není, jsou **souřadnice odtažených bublin** — to není obsah,
+ale vzhled, takže bydlí v `.txtnote/mindmap.txt`. Po jeho smazání se mapa
+srovná podle odsazení a nic dalšího se neztratí. Buňka bez uložené pozice se
+posouvá s odtaženým rodičem, aby po přetažení nezůstal podstrom rozházený.
 
 ### Koš
 
@@ -268,6 +322,8 @@ je hned vidět, na co se kliklo.
 * kotvy `[[Docker#Instalace]]` a stabilní ID `[[Docker#^docker-install]]`
 * embedy `![[Docker]]` a přílohy `[[attachments/manual.pdf]]`
 * sekce `== Nadpis ==`, volitelně `== Nadpis == ^id`
+* mind mapy `@mapa` s odsazeným seznamem uzlů, stabilními ID `^id`, barvami
+  `@color:` a ručními spoji v bloku `@spoje`
 * tagy `#docker`, hierarchické `#server/linux` (a `C#` ani `#123` tagem nejsou)
 * úkoly `[ ]`, `[x]`, `[!]` včetně atributů `@due:2026-08-15`
 * automatickou detekci URL
@@ -288,10 +344,11 @@ assert_eq!(note.tags[0].name, "docker");
 | Část | Stav |
 | --- | --- |
 | parser formátu | hotovo, 59 testů |
-| index, resolver, složky, backlinky, fulltext | hotovo, 73 testů |
+| mind mapy `@mapa` (ID, spoje, barvy, pozice) | hotovo, 27 testů v jádře |
+| index, resolver, složky, backlinky, fulltext | hotovo, 81 testů |
 | skládání textu pro hledání (diakritika, dotaz) | hotovo, 8 testů |
-| Tauri backend | hotovo, 14 testů |
-| UI | hotové pro MVP, testované ručně |
+| Tauri backend | hotovo, 17 testů |
+| UI včetně mind map | hotové pro MVP, testované ručně |
 | přejmenování a přesouvání poznámek s aktualizací odkazů | plánováno |
 | sledování změn na disku (watch) | plánováno |
 | embedy `![[…]]` v preview | plánováno |

@@ -1206,3 +1206,81 @@ fn read_vraci_aktualni_obsah_z_disku() {
     fs::write(tmp.root.join("Docker.txt"), "Upraveno ve Vimu\n").unwrap();
     assert_eq!(ws.read("Docker.txt").unwrap(), "Upraveno ve Vimu\n");
 }
+
+// --- rozvržení mind map ----------------------------------------------------
+
+#[test]
+fn pozice_bublin_prezijou_znovunacteni() {
+    let tmp = TempWorkspace::new("layout", &[("Server.txt", "@mapa\n- A ^a\n- B ^b\n")]);
+    let mut ws = tmp.load();
+
+    ws.set_node_position("Server.txt", "a", Some((120, 40))).unwrap();
+    ws.set_node_position("Server.txt", "b", Some((320, 140))).unwrap();
+
+    let again = tmp.load();
+    let mut positions = again.node_positions("Server.txt");
+    positions.sort();
+    assert_eq!(positions, vec![("a", (120, 40)), ("b", (320, 140))]);
+}
+
+#[test]
+fn zrusena_pozice_zmizi_i_ze_souboru() {
+    let tmp = TempWorkspace::new("layout-zrus", &[("Server.txt", "@mapa\n- A ^a\n")]);
+    let mut ws = tmp.load();
+
+    ws.set_node_position("Server.txt", "a", Some((10, 20))).unwrap();
+    ws.set_node_position("Server.txt", "a", None).unwrap();
+
+    assert!(ws.node_positions("Server.txt").is_empty());
+    // Prázdný soubor se neudržuje — rozvržení je jen cache.
+    assert!(tmp.load().node_positions("Server.txt").is_empty());
+}
+
+#[test]
+fn pozice_jdou_s_poznamkou_pri_prejmenovani() {
+    let tmp = TempWorkspace::new("layout-move", &[("Server.txt", "@mapa\n- A ^a\n")]);
+    let mut ws = tmp.load();
+    ws.set_node_position("Server.txt", "a", Some((50, 60))).unwrap();
+
+    ws.move_note("Server.txt", "Servery/Produkce.txt").unwrap();
+
+    assert!(ws.node_positions("Server.txt").is_empty());
+    assert_eq!(ws.node_positions("Servery/Produkce.txt"), vec![("a", (50, 60))]);
+}
+
+#[test]
+fn pozice_se_posunou_i_s_presunutou_slozkou() {
+    let tmp = TempWorkspace::new(
+        "layout-folder",
+        &[("Projekty/Server.txt", "@mapa\n- A ^a\n"), ("Servery/x.txt", "x\n")],
+    );
+    let mut ws = tmp.load();
+    ws.set_node_position("Projekty/Server.txt", "a", Some((7, 8))).unwrap();
+
+    ws.move_folder("Projekty", "Servery/Projekty").unwrap();
+
+    assert_eq!(
+        ws.node_positions("Servery/Projekty/Server.txt"),
+        vec![("a", (7, 8))]
+    );
+}
+
+#[test]
+fn pozice_smazane_poznamky_v_souboru_nezustanou() {
+    let tmp = TempWorkspace::new("layout-del", &[("Server.txt", "@mapa\n- A ^a\n")]);
+    let mut ws = tmp.load();
+    ws.set_node_position("Server.txt", "a", Some((50, 60))).unwrap();
+
+    ws.delete_note("Server.txt").unwrap();
+
+    assert!(ws.node_positions("Server.txt").is_empty());
+    assert!(tmp.load().node_positions("Server.txt").is_empty());
+}
+
+#[test]
+fn uzel_bez_id_nema_kam_pozici_ulozit() {
+    let tmp = TempWorkspace::new("layout-noid", &[("Server.txt", "@mapa\n- A\n")]);
+    let mut ws = tmp.load();
+
+    assert!(ws.set_node_position("Server.txt", "  ", Some((1, 2))).is_err());
+}

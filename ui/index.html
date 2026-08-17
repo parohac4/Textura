@@ -54,9 +54,45 @@
         <header id="note-head">
           <span id="note-title">Textura</span>
           <span id="note-path"></span>
+          <button id="mindmap" class="ghost" title="Mind mapa (Ctrl+M)">Mapa</button>
           <span id="save-state"></span>
         </header>
         <div id="editor"></div>
+
+        <div id="map-pane" hidden>
+          <div class="map-head">
+            <span id="map-title"></span>
+            <select id="map-pick" hidden title="Mapy v této poznámce"></select>
+            <span class="spacer"></span>
+            <button id="map-child" class="ghost" title="Nová podřízená buňka (Tab)">
+              + Potomek
+            </button>
+            <button id="map-sibling" class="ghost" title="Nová sousední buňka (Enter)">
+              + Sourozenec
+            </button>
+            <button id="map-edit" class="ghost" title="Upravit buňku (F2)">Upravit</button>
+            <button id="map-connect" class="ghost" title="Spojit s jinou buňkou (S)">
+              Spojit…
+            </button>
+            <button id="map-color" class="ghost" title="Barva buňky (B)">Barva…</button>
+            <button id="map-delete" class="ghost" title="Smazat buňku nebo spoj (Delete)">
+              Smazat
+            </button>
+            <button id="map-tidy" class="ghost" title="Srovnat bubliny podle zanoření">
+              Srovnat
+            </button>
+            <button id="map-rename" class="ghost" title="Přejmenovat mapu">Název…</button>
+            <button id="map-new" class="ghost" title="Vložit další mapu">+ Mapa</button>
+            <button id="map-close" class="ghost" title="Zpět do textu (Esc)">Text</button>
+          </div>
+          <div id="map-canvas" class="scroll" tabindex="0"></div>
+          <div id="map-hint" class="map-hint">
+            Bubliny se dají tahat myší. <kbd>Tab</kbd> potomek, <kbd>Enter</kbd> sourozenec,
+            <kbd>F2</kbd> úprava, <kbd>S</kbd> spojit s jinou buňkou, <kbd>B</kbd> barva, <kbd>Delete</kbd> smazat
+            buňku nebo vybraný spoj, <kbd>Alt</kbd>+šipky přesun v osnově, šipky výběr,
+            <kbd>Esc</kbd> zpět do textu. Kliknutí na ↗ otevře poznámku, pravý klik nabídne menu.
+          </div>
+        </div>
         <footer id="status">
           Otevři složku s <code>.txt</code> poznámkami. Nová poznámka
           <kbd>Ctrl</kbd>+<kbd>N</kbd>, odkaz otevřeš <kbd>Ctrl</kbd>+<kbd>klik</kbd>,
