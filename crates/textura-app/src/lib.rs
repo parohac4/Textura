@@ -11,17 +11,28 @@ pub mod spellcheck;
 
 use commands::AppState;
 
+/// Složka s poznámkami z příkazové řádky.
+///
+/// Přepínače se přeskakují: aplikaci spuštěnou z Finderu nebo Docku předává
+/// macOS vlastní argumenty (`-psn_0_…`, `-NSDocumentRevisionsDebugMode`)
+/// a bez tohohle filtru by se z nich stala „složka“, kterou by se aplikace
+/// marně pokoušela otevřít.
+fn initial_workspace_arg() -> Option<String> {
+    std::env::args().skip(1).find(|arg| !arg.starts_with('-'))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState {
-            initial: std::env::args().nth(1),
+            initial: initial_workspace_arg(),
             ..AppState::default()
         })
         .invoke_handler(tauri::generate_handler![
             commands::initial_workspace,
+            commands::platform,
             commands::open_workspace,
             commands::reload_workspace,
             commands::list_notes,

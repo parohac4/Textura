@@ -1,0 +1,89 @@
+name: macOS balíček
+
+# Křížový build Tauri aplikace z Linuxu není možný, takže .dmg staví tenhle
+# workflow na runnerech od GitHubu — kdo Mac nemá, dostane balíček stejně.
+#
+# Na tag `v*` se hotové .dmg přiloží k releasu, který založil ./release.sh.
+# Ručním spuštěním (workflow_dispatch) vzniknou jen artefakty ke stažení,
+# což se hodí na vyzkoušení změn před vydáním.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon i Intel: univerzální binárka by sice stačila jedna,
+          # ale zdvojnásobuje velikost stahovaného balíčku.
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            arch: aarch64
+          - runner: macos-13
+            target: x86_64-apple-darwin
+            arch: x64
+
+    runs-on: ${{ matrix.runner }}
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Závislosti frontendu
+        run: npm --prefix ui ci
+
+      - name: Testy jádra
+        run: cargo test
+
+      - name: Balíček
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: crates/textura-app
+          args: --target ${{ matrix.target }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Artefakt ke stažení
+        uses: actions/upload-artifact@v4
+        with:
+          name: Textura-macos-${{ matrix.arch }}
+          path: target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      - name: Přiložit k releasu
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # release.sh pushne tag dřív, než založí release, takže tady chvíli
+          # nemusí existovat. Build stejně trvá minuty; pár pokusů to pokryje.
+          for attempt in $(seq 1 10); do
+            if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+              gh release upload "${GITHUB_REF_NAME}" \
+                target/${{ matrix.target }}/release/bundle/dmg/*.dmg --clobber
+              exit 0
+            fi
+            echo "release ${GITHUB_REF_NAME} zatím není, čekám (pokus $attempt/10)"
+            sleep 30
+          done
+          echo "release ${GITHUB_REF_NAME} nevznikl — .dmg zůstává jako artefakt buildu" >&2
+          exit 1

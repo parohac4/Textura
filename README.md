@@ -38,6 +38,13 @@ Kontrola překlepů používá slovníky nainstalované v systému, například:
 sudo apt install hunspell-cs hunspell-en-us
 ```
 
+Na macOS žádné systémové knihovny doinstalovávat netřeba — WebKit i kontrola
+překlepů jsou součástí systému. Stačí nástroje Xcode:
+
+```sh
+xcode-select --install
+```
+
 ```sh
 npm --prefix ui install
 ```
@@ -67,6 +74,77 @@ naposledy použitá:
 ```sh
 cargo run -p textura-app ~/Poznamky
 ```
+
+## macOS
+
+Podporované od macOS 11 (Big Sur), na Apple Silicon i na Intelu.
+
+### Instalace
+
+Z [releasů](https://github.com/parohac4/Textura/releases) stáhni `.dmg` pro
+svou architekturu — `aarch64` pro Apple Silicon (M1 a novější), `x64` pro
+Intel — otevři ho a přetáhni **Texturu** do složky Aplikace.
+
+Balíček není podepsaný Apple certifikátem (ten stojí 99 $ ročně), takže při
+prvním spuštění Gatekeeper zahlásí, že aplikace je poškozená nebo od
+neověřeného vývojáře. Karanténní příznak se sundá jednou a napořád:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Textura.app
+```
+
+Pak se aplikace spouští normálně, i po aktualizaci na novější verzi (ta se
+instaluje stejně — přetažením přes starou).
+
+Odinstalace je přetažení `/Applications/Textura.app` do koše. Poznámky zůstanou
+netknuté, aplikace si mimo vybranou složku nic neukládá.
+
+### Sestavení ze zdrojů
+
+Na Macu s Rustem, Node 18+ a nástroji Xcode:
+
+```sh
+npm --prefix ui install
+cd crates/textura-app && cargo tauri build
+```
+
+Výsledné `.app` a `.dmg` jsou v `target/release/bundle/`. Křížový build
+z Linuxu možný není — macOS balíček musí vzniknout na macOS.
+
+Kdo Mac po ruce nemá, nechá ho postavit GitHub Actions:
+[.github/workflows/macos.yml](.github/workflows/macos.yml) staví `.dmg` pro obě
+architektury. Na tag `v*` je přiloží k releasu, ruční spuštění z karty Actions
+je nechá jen ke stažení jako artefakty.
+
+Na Macu se vydání dopne skriptem
+[release-macos.sh](release-macos.sh) — postaví `.dmg` pro architekturu daného
+stroje a s `--upload` ho přiloží k releasu, který už založil `./release.sh`:
+
+```sh
+./release-macos.sh --dry-run    # jen vypíše plán
+./release-macos.sh --upload     # postaví a přiloží k releasu podle Cargo.toml
+```
+
+Verzi ani tag tenhle skript nemění; vydává se pořád z Linuxu přes
+`./release.sh`.
+
+### V čem se chování liší
+
+| | Linux | macOS |
+| --- | --- | --- |
+| modifikátor zkratek | <kbd>Ctrl</kbd> | <kbd>⌘</kbd> |
+| otevření odkazu | <kbd>Ctrl</kbd>+<kbd>klik</kbd> | <kbd>⌘</kbd>+<kbd>klik</kbd> |
+| jazyk kontroly překlepů | vybírá se v nastavení aplikace | řídí systém |
+
+Na macOS je <kbd>Ctrl</kbd>+<kbd>klik</kbd> pravé tlačítko myši a
+<kbd>Ctrl</kbd> s písmenem patří textovým zkratkám systému, takže zkratky
+aplikace poslouchají jen <kbd>⌘</kbd>. Popisky v UI se přeznačí samy.
+
+Kontrola překlepů se dá zapnout a vypnout jako všude jinde, ale jazyky si bere
+ze systému (Nastavení systému → Klávesnice → Zadávání textu → Pravopis).
+Seznam slovníků proto nastavení na macOS vůbec nenabízí — WebKit na macOS
+jazyk zvenčí přepnout nedovolí a volba, která se nikde neprojeví, by jen
+mátla.
 
 ## Vydání nové verze
 
@@ -126,7 +204,8 @@ sudo apt remove textura
 cd crates/textura-app && cargo tauri build
 ```
 
-Vyrobí `.deb`, `.rpm` a AppImage v `target/release/bundle/`.
+Vyrobí `.deb`, `.rpm` a AppImage v `target/release/bundle/`. Na macOS tentýž
+příkaz vyrobí `.app` a `.dmg` — viz [macOS](#macos).
 
 Aktualizace nainstalované aplikace:
 
@@ -349,6 +428,7 @@ assert_eq!(note.tags[0].name, "docker");
 | skládání textu pro hledání (diakritika, dotaz) | hotovo, 8 testů |
 | Tauri backend | hotovo, 17 testů |
 | UI včetně mind map | hotové pro MVP, testované ručně |
+| macOS: balíček `.dmg`, zkratky na ⌘, kontrola překlepů | připraveno, na Macu zatím neověřeno |
 | přejmenování a přesouvání poznámek s aktualizací odkazů | plánováno |
 | sledování změn na disku (watch) | plánováno |
 | embedy `![[…]]` v preview | plánováno |

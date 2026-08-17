@@ -3,7 +3,7 @@
 // Editor nic neparsuje — dekorace dostane hotové z backendu (`analyze`),
 // takže pravidla formátu zůstávají na jednom místě v `textura-core`.
 
-import { EditorState, StateEffect, StateField } from "@codemirror/state";
+import { Compartment, EditorState, StateEffect, StateField } from "@codemirror/state";
 import {
   EditorView,
   Decoration,
@@ -12,6 +12,7 @@ import {
   rectangularSelection,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { MOD_LABEL, isMod } from "./platform.js";
 
 /** Efekt, kterým se do editoru nalije nová analýza z backendu. */
 export const setAnalysis = StateEffect.define();
@@ -27,7 +28,7 @@ const cls = {
   marker: Decoration.mark({ class: "tx-task-marker" }),
   mindmap: Decoration.mark({
     class: "tx-mindmap",
-    attributes: { title: "Mind mapa — Ctrl+klik ji otevře jako schéma" },
+    attributes: { title: `Mind mapa — ${MOD_LABEL}+klik ji otevře jako schéma` },
   }),
 };
 
@@ -41,10 +42,10 @@ function linkDecoration(link) {
       "data-raw": link.raw,
       title:
         link.state === "unresolved"
-          ? `${link.display} — poznámka zatím neexistuje, Ctrl+klik ji založí`
+          ? `${link.display} — poznámka zatím neexistuje, ${MOD_LABEL}+klik ji založí`
           : link.state === "ambiguous"
-            ? `${link.display} — víc kandidátů, Ctrl+klik nabídne výběr`
-            : `${link.display} — Ctrl+klik otevře`,
+            ? `${link.display} — víc kandidátů, ${MOD_LABEL}+klik nabídne výběr`
+            : `${link.display} — ${MOD_LABEL}+klik otevře`,
     },
   });
 }
@@ -186,16 +187,38 @@ const theme = EditorView.theme({
  * @param parent     kam se editor připojí
  * @param handlers   { onChange, onActivate(marker, event), onSave }
  */
+/** Přepínatelná část nastavení editoru — atribut `spellcheck`. */
+const spellCheckAttr = new Compartment();
+
+const contentSpellCheck = (enabled) => ({
+  spellcheck: enabled ? "true" : "false",
+  autocorrect: "off",
+  autocapitalize: "off",
+});
+
+/**
+ * Zapne nebo vypne kontrolu překlepů v editoru.
+ *
+ * Na macOS a Windows si jazyk řídí systém a přepnout se dá jen tohle; na
+ * Linuxu tím jen doplňujeme nastavení, které backend posílá do WebKitGTK.
+ */
+export function setSpellCheck(view, enabled) {
+  view.dispatch({
+    effects: spellCheckAttr.reconfigure(EditorView.contentAttributes.of(contentSpellCheck(enabled))),
+  });
+}
+
 export function createEditor(parent, handlers) {
   const clickHandler = EditorView.domEventHandlers({
     mousedown(event, view) {
-      const activate = event.ctrlKey || event.metaKey;
+      // Na macOS jen Cmd: Ctrl+klik je tam pravé tlačítko.
+      const activate = isMod(event);
       const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
       if (pos == null) return false;
       const marker = markerAt(view, pos);
       if (!marker) return false;
 
-      // Checkbox se překlikává obyčejným klikem, odkazy až s Ctrl —
+      // Checkbox se překlikává obyčejným klikem, odkazy až s modifikátorem —
       // jinak by nešlo do odkazu kliknout kurzorem.
       if (marker.type === "task" && !activate) {
         handlers.onActivate(marker, event);
@@ -224,13 +247,11 @@ export function createEditor(parent, handlers) {
         EditorView.lineWrapping,
         analysisField,
         clickHandler,
-        // Bez toho webview obsah editoru na překlepy vůbec nekontroluje;
-        // jestli se kontrola opravdu provádí, řídí nastavení v backendu.
-        EditorView.contentAttributes.of({
-          spellcheck: "true",
-          autocorrect: "off",
-          autocapitalize: "off",
-        }),
+        // Bez toho webview obsah editoru na překlepy vůbec nekontroluje.
+        // Na Linuxu je atribut jen povolením a zbytek řídí backend přes
+        // WebKitGTK; na macOS a Windows je tohle jediná páka, kterou máme,
+        // proto se dá přepínat za běhu (viz `setSpellCheck`).
+        spellCheckAttr.of(contentSpellCheck(true)),
         keymap.of([
           { key: "Mod-s", run: () => (handlers.onSave(), true), preventDefault: true },
           continueList,

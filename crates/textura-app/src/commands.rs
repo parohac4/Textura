@@ -40,6 +40,15 @@ pub fn initial_workspace(state: State<AppState>) -> Option<String> {
     state.initial.clone()
 }
 
+/// Systém, na kterém aplikace běží: `"linux"`, `"macos"`, `"windows"`.
+///
+/// UI podle toho mění jen texty a nabídku slovníků — chování kontroly
+/// překlepů se na každé platformě řídí jinak (viz [`crate::spellcheck`]).
+#[tauri::command]
+pub fn platform() -> &'static str {
+    std::env::consts::OS
+}
+
 #[tauri::command]
 pub fn open_workspace(path: String, state: State<AppState>) -> Res<WorkspaceInfo> {
     let ws = Workspace::scan(&path).map_err(|e| format!("nelze načíst {path}: {e}"))?;

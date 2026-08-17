@@ -3,9 +3,17 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl, openPath } from "@tauri-apps/plugin-opener";
 
 import * as api from "./api.js";
-import { createEditor, setAnalysis, setContent, goToLine, currentAnalysis } from "./editor.js";
+import {
+  createEditor,
+  setAnalysis,
+  setContent,
+  goToLine,
+  currentAnalysis,
+  setSpellCheck,
+} from "./editor.js";
 import * as mm from "./mindmap.js";
 import { loadSettings, saveSettings, applyTheme } from "./settings.js";
+import { isMod, localizeShortcutLabels } from "./platform.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -27,6 +35,8 @@ const state = {
 };
 
 applyTheme(state.settings.theme);
+// Popisky zkratek v index.html mluví o Ctrl; na macOS se z něj stane ⌘.
+localizeShortcutLabels();
 
 // --- kontrola překlepů -----------------------------------------------------
 
@@ -34,6 +44,9 @@ applyTheme(state.settings.theme);
 async function applySpellCheck() {
   try {
     state.dictionaries ??= await api.availableDictionaries();
+
+    // Atribut na editoru je jediné, co kontrolu vypne na macOS a ve Windows.
+    setSpellCheck(view, state.settings.spellCheck);
 
     // Při prvním spuštění zapneme všechny slovníky, které systém nabízí —
     // uživatel obvykle píše česky i anglicky a ruční výběr by ho jen zdržel.
@@ -1377,14 +1390,19 @@ function showSettings() {
         (value) => {
           update({ spellCheck: value === "on" });
           applySpellCheck();
-          dictionaries.hidden = !state.settings.spellCheck;
+          dictionaries.hidden = !state.settings.spellCheck || systemPicksLanguage;
         },
       ),
     );
 
+    // Na macOS a ve Windows si jazyk vybírá systém sám a webview se zvenčí
+    // přepnout nedá — nabízet tu seznam by slibovalo volbu, která se nikde
+    // neprojeví.
+    const systemPicksLanguage = state.platform === "macos" || state.platform === "windows";
+
     const dictionaries = document.createElement("label");
     dictionaries.textContent = "Slovníky";
-    dictionaries.hidden = !state.settings.spellCheck;
+    dictionaries.hidden = !state.settings.spellCheck || systemPicksLanguage;
 
     const list = document.createElement("div");
     list.className = "checklist";
@@ -1415,8 +1433,11 @@ function showSettings() {
     dictionaries.append(list);
 
     const note = document.createElement("p");
-    note.textContent =
-      "Kontrola překlepů používá slovníky nainstalované v systému. Nastavení se ukládá jen v aplikaci, poznámek se nedotýká.";
+    note.textContent = systemPicksLanguage
+      ? state.platform === "macos"
+        ? "Kontrola překlepů používá systémovou kontrolu macOS. Jazyky se vybírají v Nastavení systému → Klávesnice → Zadávání textu. Nastavení se ukládá jen v aplikaci, poznámek se nedotýká."
+        : "Kontrola překlepů používá systémovou kontrolu Windows a jazyky se vybírají v nastavení systému. Nastavení se ukládá jen v aplikaci, poznámek se nedotýká."
+      : "Kontrola překlepů používá slovníky nainstalované v systému. Nastavení se ukládá jen v aplikaci, poznámek se nedotýká.";
 
     body.append(themeLabel, spellLabel, dictionaries, note);
   });
@@ -2238,20 +2259,20 @@ document.addEventListener("keydown", (event) => {
       if (inSearch && state.current) view.focus();
     }
   }
-  if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "n") {
+  if (isMod(event) && !event.shiftKey && event.key.toLowerCase() === "n") {
     event.preventDefault();
     showNewNote();
   }
-  if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "n") {
+  if (isMod(event) && event.shiftKey && event.key.toLowerCase() === "n") {
     event.preventDefault();
     createDatedNote();
   }
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "m") {
+  if (isMod(event) && event.key.toLowerCase() === "m") {
     event.preventDefault();
     // Držená klávesa posílá keydown opakovaně; mapa by problikávala.
     if (!event.repeat) toggleMindmap();
   }
-  if ((event.ctrlKey || event.metaKey) && event.key === "f") {
+  if (isMod(event) && event.key === "f") {
     // Bez preventDefault by webview otevřel vlastní hledání v stránce.
     event.preventDefault();
     focusSearch();
@@ -2265,6 +2286,7 @@ window.addEventListener("beforeunload", () => {
 // Při startu: složka z příkazové řádky, jinak ta naposledy otevřená.
 (async () => {
   state.colors = await api.availableColors().catch(() => []);
+  state.platform = await api.platform().catch(() => "linux");
   await applySpellCheck();
   const fromArgs = await api.initialWorkspace().catch(() => null);
   const path = fromArgs || localStorage.getItem("textura:workspace");

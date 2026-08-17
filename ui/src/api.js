@@ -3,6 +3,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export const initialWorkspace = () => invoke("initial_workspace");
+/** Systém pod aplikací: "linux" | "macos" | "windows". */
+export const platform = () => invoke("platform");
 export const openWorkspace = (path) => invoke("open_workspace", { path });
 export const reloadWorkspace = () => invoke("reload_workspace");
 export const listNotes = () => invoke("list_notes");

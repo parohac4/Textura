@@ -32,6 +32,14 @@
       "icons/icon.png"
     ],
     "category": "Utility",
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "dmg": {
+        "windowSize": { "width": 660, "height": 400 },
+        "appPosition": { "x": 180, "y": 170 },
+        "applicationFolderPosition": { "x": 480, "y": 170 }
+      }
+    },
     "shortDescription": "Poznámky v obyčejných .txt souborech",
     "longDescription": "Textura je poznámkovač nad obyčejnými UTF-8 .txt soubory. Poznámka zůstává čitelná jako prostý text i bez aplikace — bez Markdownu, bez povinného markupu a bez skrytého stavu v databázi."
   }
