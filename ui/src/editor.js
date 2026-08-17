@@ -162,6 +162,14 @@ const theme = EditorView.theme({
   "&.cm-focused": { outline: "none" },
   ".cm-content": { caretColor: "var(--accent)" },
   ".cm-line": { padding: "0" },
+
+  // `drawSelection` nativní kurzor skryje a kreslí si vlastní; ten má v základu
+  // černý okraj počítaný se světlým pozadím, takže v tmavém motivu zanikal.
+  // Nastavené `caretColor` výše se na něj neuplatní, barví se přes okraj.
+  ".cm-cursor, .cm-dropCursor": {
+    borderLeftColor: "var(--accent)",
+    borderLeftWidth: "2px",
+  },
 });
 
 /**
