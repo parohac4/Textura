@@ -81,6 +81,9 @@ Podporované od macOS 11 (Big Sur), na Apple Silicon i na Intelu.
 
 ### Instalace
 
+Krok za krokem, včetně spuštění buildu na GitHubu a obcházení Gatekeeperu:
+[docs/macos-instalace.md](docs/macos-instalace.md). Ve zkratce:
+
 Z [releasů](https://github.com/parohac4/Textura/releases) stáhni `.dmg` pro
 svou architekturu — `aarch64` pro Apple Silicon (M1 a novější), `x64` pro
 Intel — otevři ho a přetáhni **Texturu** do složky Aplikace.
