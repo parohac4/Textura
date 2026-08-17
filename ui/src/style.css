@@ -574,10 +574,6 @@ kbd {
   font-weight: 600;
 }
 
-.cm-activeLine {
-  background: color-mix(in srgb, var(--bg-soft) 60%, transparent);
-}
-
 /* --- kontextové menu ----------------------------------------------------- */
 
 #context-menu {

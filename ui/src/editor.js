@@ -8,7 +8,6 @@ import {
   EditorView,
   Decoration,
   keymap,
-  highlightActiveLine,
   drawSelection,
   rectangularSelection,
 } from "@codemirror/view";
@@ -204,7 +203,8 @@ export function createEditor(parent, handlers) {
         history(),
         drawSelection(),
         rectangularSelection(),
-        highlightActiveLine(),
+        // Zvýraznění aktivního řádku schválně chybí: v tmavém motivu překrývalo
+        // kurzor a ten pak nebyl v textu k nalezení.
         EditorView.lineWrapping,
         analysisField,
         clickHandler,
