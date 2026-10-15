@@ -7,3 +7,12 @@ ui/dist/
 
 # Tauri generuje při buildu
 crates/textura-app/gen/
+
+# Citlivé / lokální
+.env
+.env.*
+*.pem
+*.key
+
+# OS
+.DS_Store
